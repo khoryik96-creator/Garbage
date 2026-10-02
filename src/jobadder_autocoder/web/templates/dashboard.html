@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">YOUR CODING WORKSPACE</p><h1>Turn missing data into<br>verified facts.</h1><p class="intro">Find gaps, check the evidence, and fill Country with a clear record of every decision.</p></div>
+  <div class="edition"><span>01</span><small>COUNTRY<br>FIRST FIELD</small></div>
+</section>
+<section class="stats" aria-label="Country gap report">
+  <article><p>Profiles in this workspace</p><strong>{{ counts.total }}</strong><small>Synthetic candidate records</small></article>
+  <article><p>Missing Country</p><strong>{{ counts.missing }}</strong><small>Empty fields eligible for a run</small></article>
+  <article><p>Already filled</p><strong>{{ counts.existing }}</strong><small>Existing values are preserved</small></article>
+</section>
+<section class="start-grid">
+  <article class="card">
+    <div class="section-heading"><div><p class="eyebrow">START A RUN</p><h2>Choose how to begin.</h2></div><span class="tag">All profiles</span></div>
+    <form action="/runs" method="post" class="run-form">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <label class="field-choice"><input type="checkbox" name="fields" value="country" checked required><span><strong>Country</strong><small>Fill only truly empty Country fields</small></span><span class="tag">Selected</span></label>
+      <label for="mode">Run mode</label>
+      <select name="mode" id="mode"><option value="preview">Preview · inspect proposals without changes</option><option value="review">Review · approve each proposed change</option></select>
+      <p class="hint">Both modes scan the same profiles. Preview cannot approve changes; Review adds approval controls.</p>
+      <button class="button primary" type="submit">Start Country run <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 19 19 5M5 5h14v14"/></svg></button>
+    </form>
+  </article>
+  <aside class="assurance"><p class="eyebrow">A FEW RULES, ALWAYS</p><h2>Your data stays<br>under your control.</h2>
+    <ol><li><strong>Only the field you choose.</strong><span>This prototype handles Country.</span></li><li><strong>Only when it is empty.</strong><span>Existing values, including “Unknown,” are kept.</span></li><li><strong>Evidence before action.</strong><span>Conflicting sources need your decision.</span></li><li><strong>A trace of every change.</strong><span>Approvals are audited and support guarded undo.</span></li></ol>
+  </aside>
+</section>
+<section class="card runs-section"><div class="section-heading"><div><p class="eyebrow">RUN HISTORY</p><h2>Your recent runs</h2></div><span class="muted">Latest {{ runs|length }}</span></div>
+{% if runs %}<div class="table-wrap"><table><thead><tr><th>Run</th><th>Mode</th><th>Progress</th><th>Missing</th><th>Proposals</th><th>Status</th></tr></thead><tbody>
+{% for run in runs %}<tr><td><a class="run-link" href="/runs/{{ run.id }}">Country · {{ run.id[:8] }}</a><small class="cell-sub">{{ run.created_at|timestamp }}</small></td><td>{{ run.mode|title }}</td><td>{{ run.processed }} / {{ run.total }}</td><td>{{ run.missing }}</td><td>{{ run.proposed }}</td><td><span class="status state-{{ run.state }}">{{ run.state|title }}</span></td></tr>{% endfor %}
+</tbody></table></div>{% else %}<div class="empty-state"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M5 19 19 5M5 5h14v14"/></svg></span><h3>Your first run starts here.</h3><p>Choose Preview to see the gap report and Country proposals.</p></div>{% endif %}
+</section>
+{% endblock %}

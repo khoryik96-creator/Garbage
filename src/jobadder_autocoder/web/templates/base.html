@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Country workspace{% endblock %} · Garbage Truck</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">G</span><span>Garbage Truck<small>JobAdder auto-coder</small></span></a>
+    <nav aria-label="Main navigation">
+      <a href="/" {% if request.url.path == '/' or request.url.path.startswith('/runs/') %}aria-current="page"{% endif %}>Workspace</a>
+      <a href="/profiles" {% if request.url.path == '/profiles' %}aria-current="page"{% endif %}>Profiles</a>
+      <a href="/audit" {% if request.url.path == '/audit' %}aria-current="page"{% endif %}>Audit trail</a>
+    </nav>
+    <span class="demo-badge"><span class="dot"></span>Synthetic demo</span>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  <footer><span>Garbage Truck · Prototype 0.1</span><span>Demo profiles only · No JobAdder connection · No AI calls</span></footer>
+</body>
+</html>

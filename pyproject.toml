@@ -1,0 +1,50 @@
+[project]
+name = "jobadder-autocoder"
+version = "0.1.0"
+description = "A modular, local-first workspace for filling missing JobAdder fields."
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14,<2",
+  "fastapi>=0.115,<1",
+  "jinja2>=3.1.6,<4",
+  "pydantic>=2.10,<3",
+  "pycountry>=24.6.1,<25",
+  "python-multipart>=0.0.20,<1",
+  "sqlalchemy>=2.0.36,<3",
+  "uvicorn>=0.34,<1",
+]
+
+[dependency-groups]
+dev = ["httpx>=0.28,<1", "mypy>=1.15,<2", "pytest>=8.3,<10", "ruff>=0.11,<1"]
+
+[project.scripts]
+jobadder-autocoder = "jobadder_autocoder.cli:serve"
+jobadder-worker = "jobadder_autocoder.cli:worker"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jobadder_autocoder"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["jobadder_autocoder"]
+exclude = ["storage/migrations/"]
+
+[[tool.mypy.overrides]]
+module = ["pycountry.*"]
+ignore_missing_imports = true

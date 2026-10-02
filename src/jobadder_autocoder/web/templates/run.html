@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Country run {{ run.id[:8] }}{% endblock %}
+{% block content %}
+<div data-run-id="{{ run.id }}" data-run-state="{{ run.state }}" data-processed="{{ run.processed }}">
+<a class="back-link" href="/">← Back to workspace</a>
+<section class="compact-heading"><div><p class="eyebrow">{{ run.mode|upper }} RUN · {{ run.id[:8] }}</p><h1>Country, one profile at a time.</h1><p class="intro">{{ run.created_at|timestamp }} · All profiles · Empty fields only</p></div><span class="status state-{{ run.state }}">{{ run.state|title }}</span></section>
+<section class="card progress-card"><div class="section-heading"><strong>{{ run.processed }} of {{ run.total }} profiles scanned</strong><div class="actions">
+{% for action in (['pause', 'cancel'] if run.state in ['queued', 'running'] else ['resume', 'cancel'] if run.state in ['paused', 'failed'] else []) %}<form method="post" action="/runs/{{ run.id }}/{{ action }}"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="button secondary small">{{ action|title }}</button></form>{% endfor %}</div></div>
+<progress value="{{ run.processed }}" max="{{ run.total or 1 }}" aria-label="Profiles scanned"></progress>
+{% if run.error %}<p class="warning">{{ run.error }} You can resume after correcting the cause.</p>{% endif %}
+<div class="run-metrics"><div><strong>{{ run.missing }}</strong><span>Missing Country</span></div><div><strong>{{ run.proposed }}</strong><span>Proposals to inspect</span></div><div><strong>{{ run.existing }}</strong><span>Existing values kept</span></div><div><strong>{{ run.not_found }}</strong><span>No residence evidence</span></div></div>
+</section>
+{% if run.mode == 'preview' %}<div class="notice"><strong>Preview is read-only.</strong> These proposals cannot change a profile. Start a Review run when you want to approve changes.</div>{% elif run.state != 'completed' %}<div class="notice">Review controls become available when this run completes.</div>{% endif %}
+<div class="section-heading"><div><p class="eyebrow">CHECK THE SOURCE</p><h2>Country proposals</h2></div><span class="muted">Showing up to 50</span></div>
+{% for suggestion in suggestions %}
+<article class="card suggestion"><div class="suggestion-main"><div class="section-heading"><div><h3>{{ suggestion.candidate_name }}</h3><p class="muted">Profile #{{ suggestion.candidate_id }}</p></div><span class="status state-{{ suggestion.state }}">{{ suggestion.state|title }}</span></div>
+<div class="proposal"><span>Missing Country</span><span aria-hidden="true">→</span><strong>{{ suggestion.value|country if suggestion.value else 'Needs your decision' }}</strong>{% if suggestion.value %}<code>{{ suggestion.value }}</code>{% endif %}</div>
+<p class="hint">{{ suggestion.reason }}</p>
+{% if suggestion.state == 'pending' and run.state == 'completed' %}
+<form method="post" action="/suggestions/{{ suggestion.id }}/approve" class="approval-form">
+<input type="hidden" name="_csrf" value="{{ csrf }}"><label for="country-{{ suggestion.id }}">Country to approve</label><select id="country-{{ suggestion.id }}" name="value" required><option value="">Choose a country</option>{% for code, name in countries %}<option value="{{ code }}" {% if suggestion.value == code %}selected{% endif %}>{{ name }} ({{ code }})</option>{% endfor %}</select>
+<label for="reason-{{ suggestion.id }}">Correction note <small>Required if you change the proposal</small></label><input id="reason-{{ suggestion.id }}" name="reason" maxlength="500" placeholder="Explain your correction">
+<div class="actions"><button class="button primary small">Approve Country</button><button class="button secondary small" form="reject-{{ suggestion.id }}">Reject</button></div></form>
+<form id="reject-{{ suggestion.id }}" method="post" action="/suggestions/{{ suggestion.id }}/reject"><input type="hidden" name="_csrf" value="{{ csrf }}"></form>
+{% endif %}</div>
+<aside class="evidence"><p class="eyebrow">SOURCE EVIDENCE</p>{% for evidence in suggestion.evidence %}<div><span class="source-label">{{ evidence.source|title }}</span><blockquote>{{ evidence.quote }}</blockquote></div>{% endfor %}<span class="confidence {{ suggestion.confidence }}">{{ 'Explicit residence evidence' if suggestion.confidence == 'high' else 'Source requires review' }}</span></aside></article>
+{% else %}<div class="card empty-state"><h3>{{ 'The scan is underway.' if run.state in ['queued', 'running'] else 'No proposals on this page.' }}</h3><p>{{ 'This page updates as profiles are processed.' if run.state in ['queued', 'running'] else 'Profiles with existing countries are skipped. A proposal needs explicit residence evidence.' }}</p></div>{% endfor %}
+{% if next_cursor %}<a class="button secondary" href="/runs/{{ run.id }}?after={{ next_cursor }}">Next proposals →</a>{% endif %}
+{% if writes %}<section class="card"><div class="section-heading"><div><p class="eyebrow">CHANGE HISTORY</p><h2>Approved changes</h2></div></div><div class="table-wrap"><table><thead><tr><th>Profile</th><th>Before</th><th>After</th><th>Status</th><th>Action</th></tr></thead><tbody>{% for write in writes %}<tr><td>#{{ write.candidate_id }}</td><td>{{ write.before_value or 'Empty' }}</td><td>{{ write.after_value|country }}</td><td>{{ write.state.replace('_', ' ')|title }}</td><td>{% if write.state == 'applied' %}<form method="post" action="/writebacks/{{ write.id }}/undo"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="button secondary small">Undo</button></form>{% endif %}</td></tr>{% endfor %}</tbody></table></div><p class="hint">Undo restores the original empty value only if the profile has not changed since approval. Latest 50 changes shown.</p></section>{% endif %}
+</div>
+{% endblock %}
