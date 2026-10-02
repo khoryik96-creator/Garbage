@@ -1,8 +1,13 @@
 # JobAdder Auto-Coder: Ideation
 
-> **Status:** Draft for discussion · **Date:** 2 Oct 2026 · **Drafted by:** Claude · **Decision owner:** you
+> **Status:** Draft for discussion · **Date:** 2 Oct 2026 (updated the same day with your answers) · **Drafted by:** Claude · **Decision owner:** you
 >
 > ChatGPT is drafting ideas in parallel. Put both drafts side by side and record what you pick in the [Decision log](#11-decision-log). Anything the two drafts disagree on becomes an [open question](#12-open-questions-for-you).
+
+### ✅ Confirmed by you
+1. **Access:** you have JobAdder API access and are an admin.
+2. **What a run does:** the app goes through **all** profiles and fills in **only missing values**, and **only for the fields you select** for that run. If you select only *Country*, only Country is ever written and every other field is left untouched. See [§1.5](#15-how-a-run-works) and [§5.9](#59-guarantee-only-the-selected-fields-only-when-empty).
+3. **Scale:** about **200,000 profiles**. See [§2.1](#21-what-200000-profiles-means).
 
 ---
 
@@ -10,13 +15,14 @@
 
 | Topic | Proposal |
 |---|---|
-| **What** | An app that reads candidate profiles from JobAdder (the record, the CV and the notes). It pulls out key facts (name, email, phone, country, notice period, salary and so on), converts them to *your* JobAdder fields and picklists, and writes them back. It does this automatically when it's sure; otherwise a person approves each value on a review screen. |
-| **Where it runs** | On your computer first (a local web app at `http://localhost`). It's built so it can move to a small cloud server for a team later without a rewrite. |
-| **JobAdder access** | The **official JobAdder REST API (v2)** with OAuth 2.0, not screen-scraping. Apply for a developer account now, because the approval wait is the longest step. |
+| **What** | An app that goes through every candidate profile in JobAdder and **fills in missing values for the fields you pick** (for example only Country). It finds each value in the record, the CV or the notes, converts it to *your* JobAdder fields and picklists, and writes it back. It never touches fields you didn't pick or values that are already filled. Confident values can be filled automatically; the rest go to a review screen. |
+| **Scale** | About 200k profiles. Start with a cheap, **read-only gap report** that counts what's missing. After that, process only the profiles that are missing a selected field, and use fixed rules before calling the LLM. The backlog goes through the Batch API, with a speed limit so JobAdder stays usable for everyone else. |
+| **Where it runs** | On your computer first (a local web app at `http://localhost`). A 200k backfill takes hours to days, so the big runs belong on a machine that stays on, or on a small cloud server. |
+| **JobAdder access** | The **official JobAdder REST API (v2)** with OAuth 2.0, not screen-scraping. You already have access. Next: register the app to get a client ID and secret, and confirm how JobAdder's update call behaves (see [§5.9](#59-guarantee-only-the-selected-fields-only-when-empty)). |
 | **Language** | **Python** for everything in the MVP (FastAPI, Pydantic, SQLite and a review UI that the server renders). Add TypeScript only if we later build a browser extension. |
 | **Architecture** | A **modular monolith** (one codebase with clear internal modules) plus a job queue: *fetch → parse → extract → normalize → apply coding rules → decide → write back → audit*. To scale, add workers and switch SQLite to Postgres. Microservices aren't needed. |
 | **Extraction** | Fixed rules for predictable data (emails, phones, URLs). An **LLM with a strict JSON schema** for messy text (notice periods, salary, work rights, location). Every value carries a confidence level and a **verbatim evidence quote** that the code checks against the source. |
-| **Safety** | **Suggest-only mode first.** Turn on auto-apply one field at a time, once accuracy on a hand-checked sample proves it. Never silently overwrite a value that a person entered. |
+| **Safety** | **Only selected fields, only when empty. Nothing is ever overwritten.** Every run starts as a preview that writes nothing. Auto-fill is switched on one field at a time, once accuracy on a hand-checked sample proves it. After every write, the app re-reads the record to confirm nothing else changed. Every run can be undone. |
 | **Roles** | **You:** product owner and final approver. **Claude:** Track A, the extraction pipeline. **ChatGPT:** Track B, the JobAdder integration and the UI. Each assistant reviews the other's pull requests. |
 
 ---
@@ -27,18 +33,19 @@
 Candidate profiles in JobAdder are often half-filled or inconsistent. The useful facts are buried in CV attachments, notes and application answers ("4 weeks' notice", "looking for 140 + super", "based in Auckland, moving to Sydney in March"). Filling and tidying these fields by hand ("coding" the candidate) is slow and inconsistent, so search and shortlisting suffer.
 
 ### 1.2 Goal
-Go through profiles in bulk (the backlog) and continuously (new or updated candidates). Fill and normalize the fields your team searches on, with an audit trail and a person in control.
+Go through all ~200k profiles (the backlog), and later new or updated candidates as they come in. **Fill in the missing values for the fields you choose**, in your format, with an audit trail and a person in control. Existing values are never changed.
 
 ### 1.3 Non-goals (deliberately out of scope)
 - **Scoring, ranking or rejecting candidates.** This tool does data entry, not hiring decisions. That keeps compliance simple (see [§7](#7-security-privacy-and-compliance)).
 - Inferring anything the candidate didn't say: nationality, age, ethnicity, gender or health.
+- Changing or tidying values that already exist. A run only fills **empty** fields. Tidying could be a separate, opt-in kind of run later.
 - Replacing JobAdder or its built-in CV parsing. We fill the gaps and enforce *your* coding conventions.
 
-### 1.4 Fields to code (first cut, to be confirmed by you)
+### 1.4 Fields you can pick from (first cut; you choose which ones appear in the selector)
 
 | Field | Typical sources | Normalized form | Gotchas |
 |---|---|---|---|
-| **Name** (first, last, preferred) | Record, CV header, email signature | Fix the case only if it's all-caps or all-lowercase; keep particles such as *van der*, *O'Brien* and *McDonald* | Don't overwrite a name a recruiter edited. Flag mismatches instead. |
+| **Name** (first, last, preferred) | Record, CV header, email signature | Written as on the CV, keeping particles such as *van der*, *O'Brien* and *McDonald*; used only when the name is missing | Fixing the case of *existing* names (for example ALL CAPS) would be an overwrite, so it's out of scope for now. It could become a separate opt-in "tidy-up" run. |
 | **Email** | Record, CV, application | Lowercase and syntax-checked; primary vs. secondary | Several addresses per person, work addresses, the same email on two candidates (duplicates) |
 | **Phone** | CV, record | E.164 format (`+61412345678`) | No country code: infer it from the country, otherwise flag it |
 | **Country / location** (where they live) | Address, phone prefix, latest job, CV header | ISO 3166 code (`AU`) + state + city | Where they live ≠ nationality ≠ right to work. **Never infer nationality.** |
@@ -52,15 +59,69 @@ Go through profiles in bulk (the backlog) and continuously (new or updated candi
 
 > **Freshness matters.** A salary from a CV dated 2023 is not today's salary. Store the date of every source and prefer the newest source. Anything older than a set age (for example 6 months) goes to review as **stale**.
 
+### 1.5 How a run works
+A **run** is one pass over your profiles with settings you choose on one screen:
+
+| Setting | Choices | Example |
+|---|---|---|
+| **Fields** | Tick boxes for the fields in §1.4 | ☑ Country ☐ Notice period ☐ Salary … |
+| **Profiles** | All, or a filter (updated in the last N months, a status, a recruiter, a saved search) | All 200k |
+| **Mode** | **Preview** (writes nothing; shows what *would* be filled) → **Review** (you approve values one by one or in bulk) → **Auto-fill** (confident values are written, the rest go to review) | Preview first |
+| **What counts as "missing"** | Truly empty only, or also placeholders such as `N/A`, `-`, `TBC`, `Unknown` | Empty only |
+
+What happens to each profile:
+1. **Skip** it straight away if every selected field already has a value. Every profile that ends here costs one cheap read and no AI. The gap report tells us how many that is.
+2. Otherwise, look for the value in the **record first** (for example, Country from the address or the phone number's country code). That uses no AI and needs no CV download.
+3. Only if that fails, read the **CV and notes**, and ask the LLM **only for the selected fields**.
+4. Fill **only the empty selected fields**: straight away in Auto-fill mode, or after approval in Review mode.
+5. At the end, a **run report** shows how many profiles were filled, skipped, sent to review or found to have no information. An **undo** clears exactly the values this run wrote, provided nobody has edited them since.
+
 ---
 
 ## 2. Constraints and assumptions
 
 - **Single user at first** (you), on Windows or Mac, with a normal internet connection.
-- **JobAdder API access requires an approved developer account.** Until then we can build against recorded or fake API responses.
+- **API access: confirmed.** You have access and admin rights. We still need a registered app (client ID and secret) and a redirect URL that works for a local app. Until then, development uses recorded or fake API responses.
 - **The bottleneck is API limits, not computing power.** JobAdder rate-limits each account, and LLM APIs have throughput limits. "Scalable" therefore means queueing, retries, back-pressure and resumability more than raw speed.
 - **Candidate data is personal information.** Privacy law applies (see [§7](#7-security-privacy-and-compliance)).
 - **Two AI assistants and one owner build this.** Fewer languages, clear module boundaries and agreed interfaces (contracts) matter more than usual.
+
+### 2.1 What 200,000 profiles means
+**Start with the gap report.** Before any AI spend, the app reads every profile (read-only) and counts, for each field, how many values are missing. It also counts how many profiles have a CV and how many could be filled from the record alone. That turns the estimates below into real numbers, and it tells you which field to do first.
+
+**The funnel:**
+
+| Stage | Profiles | What it costs |
+|---|---|---|
+| All profiles | ~200,000 | JobAdder reads only (the gap report) |
+| Missing at least one selected field | *gap report tells us* | — |
+| Fillable from the record itself (no CV, no AI) | *gap report tells us* | JobAdder reads only |
+| Needs the CV or notes plus the LLM | *gap report tells us* | CV downloads + LLM |
+| No usable information anywhere | *gap report tells us* | Marked "not found", so they aren't retried every run |
+
+**LLM cost, worst case** (all 200k profiles need the LLM). This assumes about 3,000 input tokens and 600 output tokens per profile when asking only for the selected fields. Prices are US$ list prices per million input / output tokens, Oct 2026. Treat the estimates as ±2× until a pilot measures real CV sizes.
+
+| Model tier | Price (in / out) | Per profile | 200k at standard rates | 200k via Batch API (−50%) |
+|---|---|---|---|---|
+| Opus (default for accuracy) | $4 / $20 | ~$0.024 | ~$4,800 | **~$2,400** |
+| Sonnet | $2 / $10 | ~$0.012 | ~$2,400 | **~$1,200** |
+| Haiku | $1 / $5 | ~$0.006 | ~$1,200 | **~$600** |
+
+The real bill will be lower: profiles that are already complete, or that can be filled from the record, never reach the LLM. Choosing a cheaper tier is **your call**, made once the golden-set accuracy for that tier is known (see [§6](#6-llm-approach)).
+
+**Time.** JobAdder's rate limit is the real clock. A rough count of calls: one read per profile (fewer if search pages already include the fields), about three more per profile that needs its CV (attachment list, download, notes) and one per write. For example, 200k reads + 100k CV lookups × 3 + 100k writes ≈ **600k calls**:
+
+| Allowed rate (illustrative; we'll measure the real one) | Time for ~600k calls |
+|---|---|
+| 1 call/second | ~7 days |
+| 5 calls/second | ~33 hours |
+
+**What this means in practice:**
+- **Share the limit politely.** The limit is per JobAdder account and is shared with your other integrations (job boards, email plugins). The app throttles itself, for example to half the allowance, and can be scheduled for nights and weekends.
+- **Resumable by design.** A multi-day run must survive restarts, sleep and network drops, and continue exactly where it stopped. Run it on a machine that stays on, or on a small cloud server.
+- **Storage.** Keep extracted text only, not original CV files: roughly 10 KB per profile, so at most about 2 GB. Delete it after the retention period.
+- **Recent candidates first for time-sensitive fields.** Notice period and salary from a 2019 CV are meaningless, so limit those fields to recently active candidates (for example updated in the last 12 months). Country can be backfilled across the whole database, with old sources flagged.
+- **Start with Country.** It can often be filled from the address or phone number with no AI at all. It's objective, easy to check, and the best field to prove the whole loop on.
 
 ---
 
@@ -83,7 +144,7 @@ Go through profiles in bulk (the backlog) and continuously (new or updated candi
 - **Rate limits:** set per account. Treat HTTP `429` as "back off and retry", page through large lists, and never fetch everything at once.
 
 ### 3.3 Triggers (how work gets into the queue)
-1. **Backfill sweep:** page through all candidates, newest first, saving progress so it can resume after a stop. Good for the one-off backlog.
+1. **Run (backfill sweep):** page through all candidates (or a filtered set), newest first, saving progress so it can resume after a stop. This is how the ~200k backlog is processed (see [§1.5](#15-how-a-run-works)).
 2. **Polling:** every N minutes, ask for candidates updated since the last check. Works on a laptop with no public URL. **The default for the MVP.**
 3. **Webhooks:** close to real time, but JobAdder needs a public HTTPS address to send them to (a tunnel or a small cloud server). **Ignore `candidate_updated` events caused by our own write-backs**, or the app will loop forever.
 4. **Partner action button:** a recruiter clicks it on a profile and that profile is processed immediately.
@@ -132,10 +193,10 @@ Go through profiles in bulk (the backlog) and continuously (new or updated candi
 
 ### 5.1 Principles
 1. **Modular monolith first.** One codebase with clear module boundaries. Scale by running more workers, not by splitting into services.
-2. **Suggest → review → apply.** Nothing reaches JobAdder without passing the decision policy. The app starts in dry-run mode.
+2. **Only the selected fields, only when empty.** A run never reads for, suggests or writes any other field, and it never overwrites a value. Runs go preview → review → auto-fill, and nothing reaches JobAdder without passing the decision policy.
 3. **Every value has evidence:** the source document, a verbatim quote, a confidence level and the source date.
 4. **Fixed rules first, LLM second.** Use libraries for predictable patterns and the LLM only for fuzzy text.
-5. **Configuration, not code.** Field mappings, picklists, groupings and auto-apply thresholds live in versioned YAML files.
+5. **Configuration, not code.** Field mappings, picklists, groupings and auto-fill thresholds live in versioned YAML files.
 6. **Safe to re-run and resumable.** Re-running on unchanged input changes nothing, and after a crash the app continues from where it stopped.
 7. **Ready for more than one JobAdder account.** Every row carries an `account_id`, so a second account is a configuration change.
 
@@ -149,17 +210,17 @@ flowchart TB
   end
 
   subgraph APP["Auto-coder (runs on your computer first)"]
-    TRG["Triggers: backfill, poll, webhook, manual"] --> Q[("Job queue")]
-    Q --> FET["1. Fetch profile, CV, notes"]
-    FET --> PAR["2. Parse documents to text"]
-    PAR --> EXT["3. Extract: rules + LLM"]
+    TRG["Triggers: run (backfill), poll, webhook, manual"] --> Q[("Job queue")]
+    Q --> FET["1. Read profile; skip if selected fields are already filled"]
+    FET --> PAR["2. Only if needed: fetch CV and notes, parse to text"]
+    PAR --> EXT["3. Extract the selected fields only: rules first, then LLM"]
     EXT --> NOR["4. Normalize and validate"]
     NOR --> COD["5. Apply coding rules (YAML)"]
-    COD --> DEC{"6. Confident and no conflict?"}
-    DEC -- "yes" --> WB["7. Write back"]
+    COD --> DEC{"6. Still empty and confident?"}
+    DEC -- "yes" --> WB["7. Write the selected fields only, then verify"]
     DEC -- "no" --> UI["Review UI"]
     UI -- "approved" --> WB
-    WB --> AUD[("Audit log and metrics")]
+    WB --> AUD[("Audit log, run report, undo")]
   end
 
   EVT --> TRG
@@ -179,19 +240,20 @@ flowchart TB
 | 5 | **Extractors** | (a) fixed rules: email, phone, URLs; (b) LLM extraction against a schema, with evidence | phonenumbers, LLM SDK |
 | 6 | **Normalizer and validators** | ISO codes, currencies, periods, notice → days, sanity ranges | pycountry, babel, dateparser |
 | 7 | **Coding rules engine** | Maps normalized facts to *your* JobAdder fields, picklists and tags | YAML + Pydantic |
-| 8 | **Decision policy** | Auto-apply or send to review, based on confidence, conflicts, staleness and per-field settings | YAML |
-| 9 | **Write-back** | Updates only the changed fields, with a key that prevents duplicate writes; re-reads the record afterwards to confirm | Connector |
+| 8 | **Decision policy** | Auto-fill or send to review, based on confidence, whether the field is still empty, staleness and per-field settings | YAML |
+| 9 | **Write-back** | Writes **only the selected fields that are still empty**, with a key that prevents duplicate writes; re-reads the record afterwards and stops the run if anything else changed (see [§5.9](#59-guarantee-only-the-selected-fields-only-when-empty)) | Connector |
 | 10 | **Review UI** | Queue, evidence beside each suggestion, accept / edit / reject, bulk approve, settings | FastAPI + HTMX |
 | 11 | **Audit and metrics** | Before and after values; who, what and when; pipeline, prompt and model versions; reviewer corrections, which give the real accuracy | Database + structured logs |
 | 12 | **Eval harness** | A golden set (profiles hand-coded by you) and per-field precision and recall; CI blocks changes that make accuracy worse | pytest |
+| 13 | **Gap report and run reports** | Missing values per field across all profiles, CV coverage, projected cost and time; per-run results (filled, skipped, review, not found) with undo | Database + UI |
 
 ### 5.4 The contract between components (agree on this first)
-Everything downstream works with **field suggestions**. Track A (the pipeline) produces them and Track B (the integration and UI) consumes them, so both sides can be built and tested independently:
+Everything downstream works with **field suggestions**. Track A (the pipeline) produces them and Track B (the integration and UI) consumes them, so both sides can be built and tested independently. A field that wasn't selected for the run never appears in `fields`:
 
 ```json
 {
   "candidate_id": 12345,
-  "run_id": "2026-10-02T14:03:00Z-7f3a",
+  "run": { "id": "run-0007", "selected_fields": ["notice_period", "salary_expected"], "mode": "review" },
   "pipeline_version": "0.3.0",
   "fields": {
     "notice_period": {
@@ -229,28 +291,42 @@ salary:
   default_currency_by_country: { AU: AUD, NZ: NZD, GB: GBP, SG: SGD }
   super_rate: 0.12            # AU Superannuation Guarantee from 1 Jul 2025; config, not code
 
-auto_apply:                   # everything starts false; switch on per field once accuracy is proven
-  email:         { enabled: false, only_if_empty: true, min_confidence: high }
-  country:       { enabled: false, only_if_empty: true, min_confidence: high }
-  notice_period: { enabled: false, only_if_empty: true, min_confidence: high, max_source_age_days: 180 }
+auto_fill:                    # everything starts false; switch on per field once accuracy is proven
+  email:         { enabled: false, min_confidence: high }
+  country:       { enabled: false, min_confidence: high }
+  notice_period: { enabled: false, min_confidence: high, max_source_age_days: 180 }
   salary:        { enabled: false }
+# "only when empty" is not a setting: it is always on and can't be switched off.
+```
+
+A run's settings (chosen on the run screen, saved with the run so it can be audited and undone):
+
+```yaml
+run:
+  fields: [country]                 # the ONLY fields this run may read for or write
+  profiles: { updated_within_days: null, status: any }   # null = all ~200k
+  mode: preview                     # preview | review | auto_fill
+  treat_as_empty: [""]              # optionally add "N/A", "-", "TBC", "Unknown"
+  throttle: { max_share_of_rate_limit: 0.5, schedule: "nights_and_weekends" }
 ```
 
 ### 5.6 Decision policy
 
 | Situation | Action |
 |---|---|
-| JobAdder field empty, high confidence, validators pass, field's auto-apply switched on | **Auto-apply** |
-| JobAdder field empty, medium or low confidence | Review queue |
-| JobAdder already holds the same value | Do nothing |
-| JobAdder holds a **different** value | Review: show both values with their dates. **Never overwrite silently.** |
+| Field **not selected** for this run | Never read for, suggested or written |
+| Selected field **already has a value** (any value) | Skip it. **Never overwritten.** |
+| Selected field empty, high confidence, validators pass, auto-fill on for that field | **Auto-fill** |
+| Selected field empty, medium or low confidence, or auto-fill off | Review queue |
+| Selected field empty but someone filled it while the run was going | Skip it (checked again just before writing) |
 | Source older than the field's freshness limit | Review, flagged *stale* |
 | Validation fails (salary of 1,400,000 a year, notice of 52 weeks, an email on a disposable domain) | Review, flagged |
+| Nothing found in the record, CV or notes | Mark "not found" with the date; don't retry until the profile or its documents change |
 
 ### 5.7 Data model (main tables)
-`accounts` · `candidates` (snapshot + hash) · `documents` (hash, type, date, where the text is stored) · `runs` (pipeline, prompt and model versions; tokens and cost) · `suggestions` (field, raw, normalized, confidence, evidence, status) · `reviews` · `writebacks` · `audit_events` · `sync_state` (cursors)
+`accounts` · `candidates` (snapshot + hash) · `documents` (hash, type, date, where the text is stored) · `runs` (selected fields, mode, filters; pipeline, prompt and model versions; progress cursor; tokens and cost) · `suggestions` (field, raw, normalized, confidence, evidence, status) · `reviews` · `writebacks` (before/after per field, for undo) · `not_found` (field, candidate, date) · `audit_events` · `sync_state` (cursors)
 
-**Re-run guard:** if a candidate's document hashes and the pipeline version haven't changed since the last run, skip it.
+**Re-run guard:** if a candidate's document hashes and the pipeline version haven't changed since the last run, skip it. Profiles marked "not found" are skipped the same way.
 
 ### 5.8 How it scales
 
@@ -261,6 +337,18 @@ auto_apply:                   # everything starts false; switch on per field onc
 | **3. Team / several accounts** | A team | Containers in the cloud (pick an AU/UK/EU region to suit your privacy obligations) | Postgres + Redis; N workers | All, plus logins and user roles |
 
 The code is the same at every stage. Only configuration and deployment change.
+
+### 5.9 Guarantee: only the selected fields, only when empty
+This is the promise behind "if I select only Country, the rest you don't touch". It's enforced in five layers, so a bug in one layer can't break it:
+
+1. **Extraction asks only for the selected fields.** The LLM schema is built from the run's field list, so other fields are never even produced. (This also makes calls cheaper.)
+2. **Re-check just before writing.** The app re-reads the candidate right before the write. If the field now has a value, it skips it.
+3. **Minimal write.** The update contains only the selected fields that are still empty.
+   > ⚠️ **To verify first:** does JobAdder's candidate update accept a partial change, or does it replace the whole record? If it's a full replace, the app copies every other field unchanged from the fresh read in step 2. This is the main technical risk for the promise, so it gets tested before the first real write.
+4. **Verify after writing.** The app re-reads the record and compares it with the version from step 2. If anything other than the selected fields changed, it **stops the run and alerts you** (a circuit breaker).
+5. **Audit and undo.** Before and after values are stored per field and per run. Undo puts back the empty value for exactly what that run wrote, but skips any field someone has edited since.
+
+**Before the first real run:** test on a JobAdder test account if you have one. If not, test on a handful of dummy candidates created for the purpose.
 
 ---
 
@@ -273,7 +361,8 @@ The code is the same at every stage. Only configuration and deployment change.
 - **Contact details masked:** emails and phone numbers are extracted locally, so they can be replaced with placeholders before the text goes to the LLM.
 - **Backlog through the Batch API:** about 50% cheaper and asynchronous (results within 24 hours, often much sooner). Single profiles use normal real-time calls. **Prompt caching** covers the fixed instructions and schema.
 - **Swappable provider:** the pipeline calls an `Extractor` interface, not a vendor SDK, so another model or provider can be tested on the same golden set.
-- **Rough cost (to be measured):** a CV plus notes is about 3–6k input tokens, and the structured answer is about 0.5–2k output tokens. At current Opus-tier list prices (about US$4 per million input tokens and US$20 per million output tokens, Oct 2026), that's roughly **US$0.03–0.08 per profile**, about half that through the Batch API. A 10,000-profile backlog comes to roughly **US$150–400**. We'll measure on 50 real profiles before committing.
+- **Ask only for what was selected:** the prompt and schema contain only the run's selected fields, so the answer is short and cheap, and other fields can't leak into the result.
+- **Cost:** for 200k profiles the worst case is about **US$2,400 with the Opus tier via the Batch API** (about US$600 with the Haiku tier). The real figure is lower, because most profiles never reach the LLM. See the cost table in [§2.1](#21-what-200000-profiles-means). We'll measure on a 200-profile pilot before any large run.
 
 ---
 
@@ -295,7 +384,7 @@ The code is the same at every stage. Only configuration and deployment change.
 
 | Role | Who | Responsibilities |
 |---|---|---|
-| **Product owner and domain expert** | **You** | Final say on fields, coding rules and when values may be overwritten. JobAdder admin tasks: the developer-account application, custom fields and a test account if one is available. Provide 50–100 anonymized sample profiles and **hand-code the golden set**. Merge PRs. |
+| **Product owner and domain expert** | **You** | Final say on which fields appear in the selector and on the coding rules. JobAdder admin tasks: registering the app, custom fields and a test account if one is available. Provide 50–100 anonymized sample profiles and **hand-code the golden set**. Start the big runs and merge PRs. |
 | **Track A: extraction pipeline** | **Claude** | The shared contracts and schemas (§5.4), document parsing, extractors, prompts, normalizers, the coding rules engine, the decision policy and the eval harness |
 | **Track B: integration and UI** | **ChatGPT** | The JobAdder connector (OAuth, client, rate limiting, sync, webhooks), write-back with verification, the audit log, the review UI, packaging (one-command install and run) and the user guide |
 | **Reviewer** | The other assistant | Every PR is reviewed by the assistant that didn't write it. Then you merge. |
@@ -316,7 +405,7 @@ The code is the same at every stage. Only configuration and deployment change.
 |---|---|
 | **Recruiter** | Review and approve suggestions for their own candidates |
 | **Lead / QA** | Bulk-approve, edit coding rules (with a preview of the effect) and see the accuracy dashboard |
-| **Admin** | Connect JobAdder accounts, manage users and set retention and auto-apply policy |
+| **Admin** | Connect JobAdder accounts, manage users and set retention and auto-fill policy |
 
 ---
 
@@ -324,11 +413,12 @@ The code is the same at every stage. Only configuration and deployment change.
 
 | Phase | Goal | Deliverables | Exit criteria |
 |---|---|---|---|
-| **0. Discovery** | Access and definitions | Developer-account application; final field list with picklist values; 50–100 anonymized sample profiles; a golden set coded by you | API credentials received (or applied for); field list signed off |
-| **1. Read-only MVP** | Prove accuracy | Connector (read only), parser, extractors, normalizer, review UI, CSV export of suggestions, eval harness | Per-field accuracy on the golden set meets the agreed bar (proposal: ≥95% overall, ≥98% for any field that will be auto-applied) |
-| **2. Write-back** | Save time | Approve → write to JobAdder; audit log; per-field auto-apply switches; backlog run through the Batch API | Zero bad writes in a 2-week pilot; measured minutes saved per profile |
-| **3. Always on and team** | Scale | Polling or webhooks, partner action button, Postgres, users and roles, cloud deployment | Stable unattended operation |
-| **4. Extras** | More value | Duplicate detection, skills taxonomy, data-quality dashboard, Chrome side panel | Driven by what you find useful |
+| **0. Setup** | Definitions | Register the app (client ID and secret, redirect URL); field list with picklist values; a test account or dummy candidates; 50–100 anonymized sample profiles; a golden set coded by you | App registered; field list signed off |
+| **1. Gap report** (read-only) | Know the real workload | Connector (read only) plus a sweep over all ~200k profiles: missing values per field, CV coverage, projected cost and time | You've seen the numbers and picked the first field (proposal: Country) |
+| **2. First field end to end** (Country) | Prove the whole loop | Run screen (field picker; preview, review and auto-fill modes), extraction for Country, review UI, write-back with the [§5.9](#59-guarantee-only-the-selected-fields-only-when-empty) guarantee, run report and undo, eval harness | ≥98% accuracy on the golden set; **zero changes to unselected fields** in a 1,000-profile pilot |
+| **3. Full backfill and more fields** | Fill the gaps at scale | A throttled, resumable 200k run; notice period, salary and work rights for recent candidates; Batch API | Backlog done within budget; reviewers rarely have to correct values |
+| **4. Always on and team** | Keep it filled | Polling or webhooks for new and updated candidates, partner action button, Postgres, users and roles, cloud deployment | Runs reliably unattended |
+| **5. Extras** | More value | Duplicate detection, optional opt-in "tidy existing values" runs, skills taxonomy, data-quality dashboard, Chrome side panel | Driven by what you find useful |
 
 ---
 
@@ -341,7 +431,7 @@ The code is the same at every stage. Only configuration and deployment change.
 ├── schemas/                    # shared Pydantic models / JSON Schema (the contracts)
 ├── config/
 │   ├── field_map.yaml          # normalized fact → JobAdder field/picklist
-│   └── coding_rules.yaml       # bands, defaults, auto-apply policy
+│   └── coding_rules.yaml       # bands, defaults, auto-fill policy
 ├── app/
 │   ├── connector/              # JobAdder OAuth, client, webhooks, write-back   (Track B)
 │   ├── pipeline/               # parse, extract, normalize, rules, decide       (Track A)
@@ -357,28 +447,33 @@ The code is the same at every stage. Only configuration and deployment change.
 
 | # | Decision | Proposal (this draft) | ChatGPT's draft | Status |
 |---|---|---|---|---|
-| D1 | How to connect to JobAdder | Official REST API v2 (OAuth 2.0) | | Proposed |
+| D1 | How to connect to JobAdder | Official REST API v2 (OAuth 2.0) | | **Confirmed** (you have access and admin rights) |
 | D2 | Language | Python 3.12+, one language for the MVP | | Proposed |
 | D3 | UI | Local web app rendered on the server (FastAPI + HTMX) | | Proposed |
 | D4 | Storage and queue | SQLite + job table → Postgres + Redis | | Proposed |
 | D5 | LLM | Claude API, Opus tier by default, behind an `Extractor` interface; Batch API for the backlog | | Proposed |
-| D6 | Write policy | Suggest-only until each field's accuracy is proven; never overwrite silently | | Proposed |
+| D6 | Write policy | **Only the selected fields, only when empty, never overwrite.** Preview → review → auto-fill, switched on per field once accuracy is proven | | **Confirmed by you** (the preview and review steps are proposed) |
 | D7 | Team split | Claude = Track A, ChatGPT = Track B, cross-review, you merge | | **Needs your OK** |
+| D8 | First field | Country (often fillable without AI, objective, easy to check) | | Proposed |
+| D9 | Backlog processing | Read-only gap report first; then a throttled (≤50% of the JobAdder rate limit), resumable run at off-peak times; Batch API for LLM calls | | Proposed |
 
 ---
 
 ## 12. Open questions for you
 
-1. **API access:** do you already have JobAdder API access or a developer account? Are you an admin on your JobAdder account?
-2. **Fields:** which fields exactly, and which of them are **custom fields**? Please export the picklist values (for example the notice period options).
-3. **Sources:** where does the information mostly live: CV attachments, notes, email, or application questions?
-4. **Volume:** how many existing profiles are in the backlog, and how many new or updated ones come in each week?
-5. **Markets:** which countries and currencies do you recruit in? Perm, contract or both? (This affects the salary, super, GST and IR35 rules.)
-6. **Users and machine:** just you, or a team? Windows or Mac?
-7. **Automation appetite:** suggest-only for now, or are you comfortable with auto-apply for "safe" fields such as email and country once they're proven?
-8. **Overwrites:** if JobAdder already has a value that differs, which wins: newest source, a person's entry, or always review?
+*Already answered:* API access (yes, as an admin), volume (~200k profiles) and overwrites (never; only missing values are filled).
+
+1. **Field selector:** which fields should appear in the selector? For **custom fields**, please export the picklist values (for example the notice period options).
+2. **What counts as missing:** only truly empty fields, or also placeholders such as `N/A`, `-`, `TBC` and `Unknown`?
+3. **Test account:** is there a JobAdder test account, or can we create a few dummy candidates to test writes on?
+4. **Always-on machine:** is there a PC that can stay on for a run lasting several days? If not, the big runs can go on a small cloud server for a modest monthly cost.
+5. **Other integrations:** which other tools use your JobAdder API (job boards, email or calendar plugins)? We need to leave them enough of the rate limit.
+6. **Sources:** where does the information mostly live: CV attachments, notes, email, or application questions?
+7. **Markets:** which countries and currencies do you recruit in? Perm, contract or both? (This affects the salary, super, GST and IR35 rules.)
+8. **Users and machine:** just you, or a team? Windows or Mac?
 9. **Privacy:** any agency or client rules on where candidate data may be processed (for example AU-only)?
-10. **Budget:** a monthly ceiling for LLM and hosting costs?
+10. **Budget:** given the worst-case table in [§2.1](#21-what-200000-profiles-means), what's your ceiling for the backlog and per month?
+11. **Team split (D7):** OK with Claude on Track A and ChatGPT on Track B?
 
 ---
 
