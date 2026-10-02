@@ -19,6 +19,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from jobadder_autocoder.audit.review import ReviewService
 from jobadder_autocoder.connectors.demo import seed_demo
 from jobadder_autocoder.contracts.errors import Conflict, NotFound
+from jobadder_autocoder.contracts.fields import FieldCatalog, field_catalog
 from jobadder_autocoder.contracts.models import Approval, Contract, RunRequest, RunView
 from jobadder_autocoder.jobs.worker import Worker
 from jobadder_autocoder.policy.country import PolicyError, normalize_country
@@ -164,6 +165,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "existing": counts["existing"],
             "mode": "synthetic",
         }
+
+    @app.get("/api/fields")
+    def fields_api() -> FieldCatalog:
+        return field_catalog()
 
     @app.get("/api/candidates")
     def candidates_api(

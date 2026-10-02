@@ -71,6 +71,11 @@ The web layer calls the application operations rather than implementing coding r
 See [the architecture decision](docs/adr/0001-python-modular-prototype.md) and
 [the scale and integration plan](docs/architecture.md).
 
+[The Kano reference](docs/kano-reference.md) documents 20 observed field mappings
+and the distinction between public OAuth lookup and browser API updates. The
+versioned catalogue is available at `/api/fields`. Other fields remain disabled
+for runs until their extraction, preservation policy, and public API mapping are tested.
+
 ## Persistent jobs and separate workers
 
 Each run captures its initial candidate boundary and processes at most 100 profiles

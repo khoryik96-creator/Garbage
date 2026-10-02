@@ -44,7 +44,10 @@ orchestrates bounded reads and stores suggestions. `audit` owns approval and und
 
 1. **Read-only live connector.** Implement OAuth and the region-specific API base URL;
    verify actual Country/custom-field mappings and pagination from the official API.
-   Use streaming pages, not a list containing the whole account.
+   Use streaming pages, not a list containing the whole account. Start with the
+   [Kano reference and versioned catalogue](kano-reference.md), which label browser
+   mappings separately from public API contracts and account-specific custom IDs.
+   Treat Country name and code as one field; either populated component blocks a fill.
 2. **Account-wide throttling.** All workers must share one account budget. Honor `429`
    and `Retry-After`, bound concurrency, and leave capacity for other integrations.
 3. **Remote-job durability.** Live API calls must occur outside long database transactions.
