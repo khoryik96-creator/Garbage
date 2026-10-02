@@ -1,0 +1,7 @@
+{{define "error"}}{{template "top" .}}
+<section class="card empty-state">
+<h1>Unable to complete this action.</h1>
+<p>{{.Message}}
+</p>
+<a class="button secondary" href="/">Back to workspace</a>
+</section>{{template "bottom" .}}{{end}}

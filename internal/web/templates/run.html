@@ -1,0 +1,164 @@
+{{define "run"}}{{template "top" .}}{{$root:=.}}{{$run:=.Run}}
+<div data-run-id="{{.Run.ID}}" data-run-state="{{.Run.State}}" data-processed="{{.Run.Processed}}">
+<a class="back-link" href="/">← Back to workspace</a>
+<section class="compact-heading">
+<div>
+<p class="eyebrow">{{title .Run.Mode}} RUN · {{short .Run.ID}}
+</p>
+<h1>Country, one profile at a time.</h1>
+<p class="intro">{{timestamp .Run.CreatedAt}} · All profiles · Empty fields only</p>
+</div>
+<span class="status state-{{.Run.State}}">{{title .Run.State}}
+</span>
+</section>
+<section class="card progress-card">
+<div class="section-heading">
+<strong>{{.Run.Processed}} of {{.Run.Total}} profiles scanned</strong>
+<div class="actions">{{range actions .Run.State}}
+<form method="post" action="/runs/{{$run.ID}}/{{.}}">
+<input type="hidden" name="_csrf" value="{{$root.CSRF}}">
+<button class="button secondary small">{{title .}}
+</button>
+</form>{{end}}
+</div>
+</div>
+<progress value="{{.Run.Processed}}" max="{{maximum .Run.Total}}" aria-label="Profiles scanned">
+</progress>{{if .Run.Error}}
+<p class="warning">{{.Run.Error}} You can resume after correcting the cause.</p>{{end}}
+<div class="run-metrics">
+<div>
+<strong>{{.Run.Missing}}
+</strong>
+<span>Missing Country</span>
+</div>
+<div>
+<strong>{{.Run.Proposed}}
+</strong>
+<span>Proposals to inspect</span>
+</div>
+<div>
+<strong>{{.Run.Existing}}
+</strong>
+<span>Existing values kept</span>
+</div>
+<div>
+<strong>{{.Run.NotFound}}
+</strong>
+<span>No residence evidence</span>
+</div>
+</div>
+</section>
+{{if eq .Run.Mode "preview"}}
+<div class="notice">
+<strong>Preview is read-only.</strong> These proposals cannot change a profile. Start a Review run when you want to approve changes.</div>{{else if ne .Run.State "completed"}}
+<div class="notice">Review controls become available when this run completes.</div>{{end}}
+<div class="section-heading">
+<div>
+<p class="eyebrow">CHECK THE SOURCE</p>
+<h2>Country proposals</h2>
+</div>
+<span class="muted">Showing up to 50</span>
+</div>
+{{range .Suggestions}}{{$s:=.}}
+<article class="card suggestion">
+<div class="suggestion-main">
+<div class="section-heading">
+<div>
+<h3>{{.CandidateName}}
+</h3>
+<p class="muted">Profile #{{.CandidateID}}
+</p>
+</div>
+<span class="status state-{{.State}}">{{title .State}}
+</span>
+</div>
+<div class="proposal">
+<span>Missing Country</span>
+<span aria-hidden="true">→</span>
+<strong>{{if .Value}}{{country .Value}}{{else}}Needs your decision{{end}}
+</strong>{{if .Value}}
+<code>{{.Value}}
+</code>{{end}}
+</div>
+<p class="hint">{{.Reason}}
+</p>
+{{if and (eq .State "pending") (eq $run.State "completed")}}
+<form method="post" action="/suggestions/{{.ID}}/approve" class="approval-form">
+<input type="hidden" name="_csrf" value="{{$root.CSRF}}">
+<label for="country-{{.ID}}">Country to approve</label>
+<select id="country-{{.ID}}" name="value" required>
+<option value="">Choose a country</option>{{range $root.Countries}}
+<option value="{{.Code}}" {{if selected $s.Value .Code}}selected{{end}}>{{.Name}} ({{.Code}})</option>{{end}}
+</select>
+<label for="reason-{{.ID}}">Correction note <small>Required if you change the proposal</small>
+</label>
+<input id="reason-{{.ID}}" name="reason" maxlength="500" placeholder="Explain your correction">
+<div class="actions">
+<button class="button primary small">Approve Country</button>
+<button class="button secondary small" form="reject-{{.ID}}">Reject</button>
+</div>
+</form>
+<form id="reject-{{.ID}}" method="post" action="/suggestions/{{.ID}}/reject">
+<input type="hidden" name="_csrf" value="{{$root.CSRF}}">
+</form>{{end}}
+</div>
+<aside class="evidence">
+<p class="eyebrow">SOURCE EVIDENCE</p>{{range .Evidence}}
+<div>
+<span class="source-label">{{title .Source}}
+</span>
+<blockquote>{{.Quote}}
+</blockquote>
+</div>{{end}}
+<span class="confidence {{.Confidence}}">{{if eq .Confidence "high"}}Explicit residence evidence{{else}}Source requires review{{end}}
+</span>
+</aside>
+</article>{{else}}
+<div class="card empty-state">
+<h3>No proposals on this page.</h3>
+<p>This page updates as profiles are processed. A proposal needs explicit residence evidence.</p>
+</div>{{end}}
+{{if .NextCursor}}
+<a class="button secondary" href="/runs/{{.Run.ID}}?after={{.NextCursor}}">Next proposals →</a>{{end}}
+{{if .Writes}}
+<section class="card">
+<div class="section-heading">
+<div>
+<p class="eyebrow">CHANGE HISTORY</p>
+<h2>Approved changes</h2>
+</div>
+</div>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>Profile</th>
+<th>Before</th>
+<th>After</th>
+<th>Status</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>{{range .Writes}}
+<tr>
+<td>#{{.CandidateID}}
+</td>
+<td>{{emptyValue .BeforeValue}}
+</td>
+<td>{{countryCode .AfterValue}}
+</td>
+<td>{{title .State}}
+</td>
+<td>{{if eq .State "applied"}}
+<form method="post" action="/writebacks/{{.ID}}/undo">
+<input type="hidden" name="_csrf" value="{{$root.CSRF}}">
+<button class="button secondary small">Undo</button>
+</form>{{end}}
+</td>
+</tr>{{end}}
+</tbody>
+</table>
+</div>
+<p class="hint">Undo restores the original empty value only if the profile has not changed since approval. Latest 50 changes shown.</p>
+</section>{{end}}
+</div>{{template "bottom" .}}{{end}}

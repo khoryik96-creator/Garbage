@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS demo_candidates (id INTEGER PRIMARY KEY, name TEXT NOT NULL, country TEXT, address_country TEXT, notes TEXT NOT NULL, other_fields JSON NOT NULL, version INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, mode TEXT NOT NULL, fields JSON NOT NULL, state TEXT NOT NULL, cursor INTEGER NOT NULL, upper_bound INTEGER NOT NULL, total INTEGER NOT NULL, processed INTEGER NOT NULL, missing INTEGER NOT NULL, proposed INTEGER NOT NULL, existing INTEGER NOT NULL, not_found INTEGER NOT NULL, created_at REAL NOT NULL, error TEXT);
+CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY REFERENCES runs(id), state TEXT NOT NULL, attempts INTEGER NOT NULL, available_at REAL NOT NULL, lease_until REAL, token TEXT, error TEXT);
+CREATE INDEX IF NOT EXISTS ix_jobs_ready ON jobs(state, available_at);
+CREATE TABLE IF NOT EXISTS suggestions (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), candidate_id INTEGER NOT NULL REFERENCES demo_candidates(id), field TEXT NOT NULL, value TEXT, confidence TEXT NOT NULL, evidence JSON NOT NULL, reason TEXT NOT NULL, state TEXT NOT NULL, CONSTRAINT uq_run_candidate_field UNIQUE(run_id,candidate_id,field));
+CREATE INDEX IF NOT EXISTS ix_suggestions_run ON suggestions(run_id,id);
+CREATE TABLE IF NOT EXISTS writebacks (id TEXT PRIMARY KEY, suggestion_id TEXT NOT NULL UNIQUE REFERENCES suggestions(id), run_id TEXT NOT NULL REFERENCES runs(id), candidate_id INTEGER NOT NULL REFERENCES demo_candidates(id), before_value TEXT, after_value TEXT NOT NULL, after_version INTEGER NOT NULL, state TEXT NOT NULL, created_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY, run_id TEXT, candidate_id INTEGER, action TEXT NOT NULL, details JSON NOT NULL, created_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_audit_events_created_at ON audit_events(created_at);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES(1);

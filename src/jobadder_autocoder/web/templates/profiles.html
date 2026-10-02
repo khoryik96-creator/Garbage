@@ -1,7 +1,0 @@
-{% extends "base.html" %}
-{% block title %}Profiles{% endblock %}
-{% block content %}
-<section class="compact-heading"><div><p class="eyebrow">SOURCE RECORDS</p><h1>The demo profiles.</h1><p class="intro">Synthetic records covering empty fields, existing values, missing evidence, and conflicting sources.</p></div></section>
-<section class="card"><div class="table-wrap"><table><thead><tr><th>Profile</th><th>Current Country</th><th>Address country</th><th>Notes</th></tr></thead><tbody>{% for candidate in page.candidates %}<tr><td><strong>{{ candidate.name }}</strong><small class="cell-sub">#{{ candidate.id }}</small></td><td><span class="{{ 'muted' if not candidate.country else '' }}">{{ candidate.country|country }}</span></td><td>{{ candidate.address_country or '—' }}</td><td class="notes-cell">{{ candidate.notes or '—' }}</td></tr>{% endfor %}</tbody></table></div></section>
-{% if not page.finished %}<a class="button secondary" href="/profiles?after={{ page.cursor }}">Next profiles →</a>{% endif %}
-{% endblock %}

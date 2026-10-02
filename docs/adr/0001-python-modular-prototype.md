@@ -1,5 +1,7 @@
 # 0001 · Python and a modular Country prototype
 
+Superseded by [Decision 0002](0002-go-core-python-document-worker.md) for language and framework selection.
+
 Status: accepted by the owner in the task conversation, 3 October 2026 (Malaysia).
 
 ## Context

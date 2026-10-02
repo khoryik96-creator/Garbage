@@ -30,7 +30,7 @@ copied from Kano. Its source checkout is a reference outside the project checkou
 
 ## Versioned catalogue
 
-[field_catalog.json](../src/jobadder_autocoder/contracts/field_catalog.json) records
+[field_catalog.json](../internal/domain/field_catalog.json) records
 20 observed fields, their source files, notes, and account-specific status. The
 read-only `/api/fields` endpoint exposes this metadata, including the source commit.
 `public_v2_mapping_verified` is false for every field. `enabled_for_runs` is true
@@ -64,7 +64,7 @@ assumed to mean nationality, work rights, visa status, or willingness to relocat
 
 ## Missing-field and preservation rules
 
-`connectors/jobadder_fields.py` provides a read-only Country observation helper for
+`internal/connectors/jobadder_fields.go` provides a read-only Country observation helper for
 the browser-record shape. A populated name or code means existing Country, even
 when the other component is blank or omitted. Conflicting or unrecognized values
 also remain existing data. Only two explicitly empty components mean missing;

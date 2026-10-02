@@ -2,67 +2,80 @@
 
 ```mermaid
 flowchart LR
-  UI[Web and API] --> R[Run and review operations]
-  R --> P[Policy and domain contracts]
-  R --> DB[(Repositories and durable queue)]
-  DB --> W[Worker]
-  W --> G[CandidateGateway interface]
-  W --> E[Extractor interface]
-  E --> P
+  UI[Web and API in Go] --> R[Run and review operations]
+  R --> P[Go policy and domain contracts]
+  R --> DB[(Repositories and durable jobs)]
+  DB --> W[Go job worker]
+  W --> G[CandidateGateway]
   G --> D[Synthetic adapter]
-  R --> G
-  R --> A[Audit and guarded undo]
+  W --> E[Go rule extractor]
+  W --> C[Versioned document client]
+  C --> PY[Python document and AI worker]
+  PY --> C
+  C --> P
+  R --> A[Go approval, audit, and undo]
 ```
 
-`contracts` is the shared vocabulary. It must not import the delivery layer, ORM,
-or vendor SDKs. `policy` controls what is missing and verifies source evidence.
-`pipeline` produces proposals, never writes candidates. `connectors` implement candidate
-access; the synthetic adapter does not imitate an unverified JobAdder API. `jobs`
-orchestrates bounded reads and stores suggestions. `audit` owns approval and undo.
-`storage` is the concrete database adapter, including its transaction boundary.
+The Go core is a modular monolith. `domain` imports neither storage nor HTTP code.
+`policy` defines missing values and evidence requirements. `pipeline` produces
+proposals. `connectors` own candidate access. `jobs` coordinates bounded work,
+`audit` owns decisions and writes, and `storage` owns the SQL transaction boundary.
+The web layer calls these operations and renders embedded templates.
+
+Python is a separate document/AI service with a narrow HTTP contract. It cannot
+access application storage or write candidates. Version 1 accepts bounded plain
+text and returns deterministic residence proposals; it has no PDF, OCR, vision,
+or paid model integration. Go binds responses to candidate/source IDs, validates
+quotes and country values, and checks permitted residence evidence. A future model
+adapter needs its own policy and evaluation work before changing this behavior.
 
 ## Guarantees implemented now
 
-- Only Country is a valid run field. Unsupported fields and modes fail validation.
-- A preview cannot approve or reject a proposal; approvals require a completed Review run.
-- All source quotes must occur verbatim in the relevant source. Conflicts have no
-  automatically chosen value; corrections require an audit note.
-- Approval checks current evidence and current Country, then performs a conditional
-  update on the candidate revision and empty Country. Other fields are compared afterward.
-- The synthetic update, suggestion state, write-back record, and audit event share one
-  transaction. A failed check rolls back all four.
-- Approval and undo reserve their state atomically. Retrying or concurrently submitting
-  a review cannot cause a second effect.
-- Undo restores the exact original empty value only while the approved value and
-  resulting candidate revision still match. Even an unrelated edit conservatively blocks undo.
-- Page results and checkpoints commit together. A page whose lease expired rolls back.
-  Claims use a token, expiration, conditional update, and a unique run/candidate/field key.
-- Failed pages retry with bounded exponential delay; after five failures the run stops.
-  Resume retains its cursor. Error messages record the error type rather than source data.
+- Country-only Preview/Review requests reject unsupported fields and modes.
+- Preview never mutates a profile. Decisions require a completed Review run.
+- Empty means null or whitespace. Placeholder values are preserved.
+- Proposals quote source text verbatim; conflicts require a correction note.
+- Approval reserves suggestion state, checks fresh evidence and Country, and
+  conditionally updates the expected revision and exact original empty value.
+- Unselected fields are compared after a write. Any unexpected change rolls back
+  the candidate, suggestion state, write record, and audit event together.
+- Approval and undo have one effect under concurrent submissions. Undo restores
+  the exact original empty value only while Country and revision remain unchanged.
+- Claims have tokens and expiring leases. Obsolete owners cannot commit a page.
+- Each page reads a bounded snapshot in a short transaction, extracts outside the
+  transaction, then commits proposals, counters, and cursor together under the lease.
+- Retries use bounded backoff, stop after five attempts, and retain fixed error
+  messages rather than provider error text that could contain candidate information.
+- Runs capture their initial upper ID; later profiles belong to later runs.
+
+SQLite uses WAL, foreign keys, a busy timeout, immediate transactions, and bounded
+connection pools. Independent connection tests verify claim and review contention.
+This is a local prototype, not a multi-host production deployment. The schema is
+compatible with the first Python prototype; Go migrations preserve its history.
 
 ## Evolving toward 200,000 profiles
 
-1. **Read-only live connector.** Implement OAuth and the region-specific API base URL;
-   verify actual Country/custom-field mappings and pagination from the official API.
-   Use streaming pages, not a list containing the whole account. Start with the
-   [Kano reference and versioned catalogue](kano-reference.md), which label browser
-   mappings separately from public API contracts and account-specific custom IDs.
-   Treat Country name and code as one field; either populated component blocks a fill.
-2. **Account-wide throttling.** All workers must share one account budget. Honor `429`
-   and `Retry-After`, bound concurrency, and leave capacity for other integrations.
-3. **Remote-job durability.** Live API calls must occur outside long database transactions.
-   Add persisted stage transitions, idempotency keys, lease renewal, and an outbox with
-   reconciliation for the uncertain outcome of a network failure after a remote write.
-   A local transaction cannot roll back an already committed JobAdder request.
-4. **Postgres and workers.** Add the supported driver, test migrations and data transfer,
-   use `FOR UPDATE SKIP LOCKED` claims or a verified queue adapter, and test several worker
-   processes. Keep per-account throttling global. SQLite claim tests are not this validation.
-5. **Document and model adapters.** Add document hashes, source dates, retention, parsers,
-   LLM schemas, cost accounting, Batch API processing, and a hand-verified evaluation set.
-   Keep source selection and field-specific freshness rules in the policy/pipeline boundary.
-6. **Team deployment.** Add authentication, authorization, account isolation, secret
-   management, observability, backups, and deployment configuration before shared access.
+1. **Read-only JobAdder adapter in Go.** Implement official OAuth, token refresh,
+   regional URLs, pagination, and account field/picklist discovery. Start with the
+   [Kano reference](kano-reference.md), keeping browser SPA and public API contracts
+   separate. Country name and code are one logical field; either populated component
+   blocks a missing-field fill.
+2. **Account-wide throttling.** Share one request budget across workers. Honor `429`
+   and `Retry-After`, bound concurrency, and leave room for other integrations.
+3. **Document processing in Python.** Add attachment ownership/type checks, document
+   hashes and source dates, PDF parsers, OCR/vision adapters, retention, model schemas,
+   cost accounting, and an evaluated set of CVs. Avoid arbitrary first-attachment
+   selection. Python returns evidence and proposals; Go retains write authority.
+4. **Remote write durability in Go.** Validate public update and conditional-write
+   semantics. Add persisted stages, idempotency, reconciliation, lease renewal, and
+   an outbox for uncertain network outcomes. SQL rollback cannot undo a remote write.
+5. **Postgres and distributed workers.** Add a tested adapter, migrations and data
+   transfer, verified claims such as `FOR UPDATE SKIP LOCKED`, shared throttling, and
+   several-process tests. Changing a connection string is not sufficient.
+6. **Team deployment.** Add authentication, authorization, account boundaries,
+   secret management, service authentication, observability, backups, and deployment
+   configuration before exposing either service beyond loopback.
 
-Re-run caching and a live write circuit breaker belong to the integration stage.
-No artificial full-backlog performance or real-data accuracy claims are made for the demo.
-The first version proves the workflow and local safety policy with reproducible tests.
+Re-run caching, source freshness, and a live write circuit breaker belong to the
+integration stage. Go improves internal type checking and core deployment; API
+budgets, extraction quality, and durable orchestration still determine practical scale.

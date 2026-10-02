@@ -1,153 +1,150 @@
 # Garbage Truck · JobAdder auto-coder
 
-A working Python prototype of the Country workflow in [Claude's brief](IDEATION.md).
-It includes a gap report, read-only previews, human review, audit history, guarded undo,
-and a persistent job queue. The interface runs locally and uses **synthetic profiles only**.
-There is no JobAdder connection, CV parser, LLM call, or auto-fill mode in this version.
+A **Go core with a Python document/AI worker**, implementing the Country workflow
+in [Claude's brief](IDEATION.md). Preview, review, persistent jobs, approvals, audit,
+and guarded undo run in Go. Python owns the document-processing boundary.
+
+This release uses **synthetic profiles only**. The document worker currently reads
+plain text with deterministic residence rules. JobAdder OAuth, PDF/OCR, vision,
+and LLM providers remain integration work; no credentials or paid model calls are needed.
 
 ## Run it
 
-Install Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/).
-From this repository's root, run these commands on Windows, macOS, or Linux:
+Requirements: Go **1.27.1**, a C compiler for the embedded SQLite driver
+(`CGO_ENABLED=1`), Python 3.12+, and [uv](https://docs.astral.sh/uv/).
+The cloud instance already has GCC. Go embeds SQLite, templates, CSS, country data,
+and field metadata in the compiled core; Python has no application database access.
+
+On Linux amd64, from this repository's root:
 
 ```sh
+bash scripts/install-go.sh
+bash scripts/go.sh build -o bin/garbage-truck ./cmd/garbage-truck
+bash scripts/go.sh build -o bin/garbage-worker ./cmd/garbage-worker
 uv sync --frozen
-uv run --frozen jobadder-autocoder
+bin/garbage-truck
 ```
 
-The terminal reports the local address, normally `http://127.0.0.1:8000`.
-To use another port, add `--port 8001`. The server binds to loopback only.
+The app binds to loopback on port 8000. Add `--port 8001` to change it.
+The helper installs a checksum-verified Go SDK in ignored `.tools/`; `scripts/go.sh`
+uses it and writable caches. It uses native Git module downloads in this cloud
+instance, where proxy archive downloads are blocked; module checksum verification
+remains enabled. On other platforms, install Go 1.27.1 and a supported C compiler,
+then use normal `go build` commands. Windows builds should use `.exe` output names.
 
-On first startup, Alembic creates `.data/autocoder.db` and adds ten synthetic profiles.
-Subsequent starts preserve profiles, runs, reviews, and audit events. `.data/` is ignored
-by Git; do not commit database files or real candidate information.
-
-To initialize without starting a server:
+The default Country demo works with the Go process alone. To exercise the Python
+boundary, start these in separate terminals:
 
 ```sh
-uv run --frozen jobadder-autocoder --init-only
+# Terminal 1
+uv run --frozen garbage-document-worker --port 8002
+
+# Terminal 2, macOS/Linux
+AUTOCODER_DOCUMENT_WORKER_URL=http://127.0.0.1:8002 bin/garbage-truck
 ```
 
-## Try the first workflow
-
-1. The workspace shows 10 profiles: 8 have missing Country and 2 have existing values.
-2. Start a **Preview** run. It scans every profile, reports the gaps, and produces 6
-   proposals: 4 contain explicit valid residence evidence and 2 need a human decision.
-   The other 2 missing profiles have no residence evidence. Preview never changes a profile.
-3. Start a **Review** run. After it completes, inspect each proposal and its source quote.
-4. Approve a valid Country, reject a proposal, or choose a correction and explain it.
-   The conflict example requires a correction note before it can be approved.
-5. Check **Profiles** and **Audit trail**. Approved changes offer **Undo** on their run page.
-   Undo is skipped if the profile was edited after the approval.
-
-Only Country is selectable. Values such as `Unknown`, `N/A`, `TBC`, and `-` count as
-existing data; the prototype does not replace them. Country is derived only from an
-explicit address country or a labelled country-of-residence statement. Phone origin,
-nationality, previous employment, and city guesses are not residence evidence.
-
-Pause, resume, and cancel controls appear while a run is active. The ten-profile
-example may finish before you can pause it; the tests exercise these controls over
-multiple pages. Reloading the page or restarting the server does not reset a run.
-
-## Architecture
-
-This is a modular monolith, with an independently runnable worker:
-
-```text
-src/jobadder_autocoder/
-  contracts/    Candidate, run, evidence, suggestion models; provider interfaces
-  connectors/   Synthetic candidate adapter; future JobAdder adapter belongs here
-  pipeline/     Deterministic Country extraction; future parsers and LLM adapters
-  policy/       Missing-value policy, field selection, evidence validation
-  jobs/         Leased durable jobs, bounded pages, retries, checkpoint recovery
-  storage/      SQLAlchemy repositories, transactions, Alembic migrations
-  audit/        Approval, rejection, audited write-back, guarded undo
-  web/          FastAPI endpoints, server-rendered templates, static assets
-```
-
-Domain contracts import neither SQLAlchemy nor FastAPI. The worker consumes the
-`CandidateGateway` and `Extractor` interfaces; review consumes the same gateway.
-The web layer calls the application operations rather than implementing coding rules.
-See [the architecture decision](docs/adr/0001-python-modular-prototype.md) and
-[the scale and integration plan](docs/architecture.md).
-
-[The Kano reference](docs/kano-reference.md) documents 20 observed field mappings
-and the distinction between public OAuth lookup and browser API updates. The
-versioned catalogue is available at `/api/fields`. Other fields remain disabled
-for runs until their extraction, preservation policy, and public API mapping are tested.
-
-## Persistent jobs and separate workers
-
-Each run captures its initial candidate boundary and processes at most 100 profiles
-per transaction. New profiles are picked up by a later run. Suggestions, counters, and
-the progress cursor commit together. Expired leases can be reclaimed; obsolete owners
-cannot commit their page. The unique run/candidate/field constraint prevents duplicates.
-
-The default starts one worker inside the web process. To run it separately, initialize
-once and then launch these in separate terminals, from the same repository directory:
-
-**PowerShell**
+In PowerShell, set the variable before launching the core:
 
 ```powershell
-uv run --frozen jobadder-autocoder --init-only
-$env:AUTOCODER_EMBEDDED_WORKER = "0"
-uv run --frozen jobadder-autocoder
-# In the second terminal:
-uv run --frozen jobadder-worker
+$env:AUTOCODER_DOCUMENT_WORKER_URL = "http://127.0.0.1:8002"
+.\bin\garbage-truck.exe
 ```
 
-**macOS / Linux**
+Explicit address evidence stays in Go. Notes go through the optional Python worker.
+Go validates response identity, protocol, country, and source quotes before storing
+proposals. Both paths produce the same demo outcomes. Worker failures use durable,
+bounded retries; document calls happen outside database transactions.
+
+## Try the workflow
+
+1. A fresh workspace has 10 profiles: 8 missing Country and 2 with existing values.
+2. Start **Preview**: 6 proposals appear, including 2 requiring a human decision.
+   Two other missing profiles have no permitted residence evidence. Preview changes no profiles.
+3. Start **Review** and inspect each proposal's source quote after the scan completes.
+4. Approve, reject, or correct a proposal with an explanation. Conflicts require a correction note.
+5. Inspect **Profiles** and **Audit trail**. Use **Undo** on the run page to restore
+   the original empty value while the profile remains unchanged since approval.
+
+Country is the only enabled run field. `Unknown`, `N/A`, `TBC`, and `-` are preserved.
+Nationality, phone origin, employment history, and city guesses are not residence
+evidence. Pause, resume, and cancel retain committed progress.
+
+## Modules and contract
+
+```text
+cmd/garbage-truck/       Go web process, with an optional embedded job worker
+cmd/garbage-worker/      Independently runnable Go job worker
+internal/domain/        Typed models, provider interfaces, versioned field catalogue
+internal/policy/        Missing-field and evidence checks, country normalization
+internal/pipeline/      Deterministic residence extraction
+internal/connectors/    Synthetic adapter and Kano Country observation helper
+internal/jobs/          Durable claims, leases, bounded pages, retries, checkpoints
+internal/storage/       SQLite repositories, transactional schema migrations
+internal/audit/         Approval, rejection, write records, guarded undo
+internal/web/           HTTP API, server-rendered UI, embedded assets
+internal/docworker/     Local Python-worker client and response validation
+services/document_worker/  Python extraction service and tests
+contracts/              Versioned document-worker JSON schema
+```
+
+The Python worker returns proposals; Go owns policy and all writes. The
+[document contract](contracts/document-worker-v1.schema.json) carries a protocol
+version, candidate ID, versioned source ID, selected field, text, and quoted evidence.
+There are no write endpoints in Python. See [the architecture](docs/architecture.md),
+[the Go decision](docs/adr/0002-go-core-python-document-worker.md), and
+[the Kano reference](docs/kano-reference.md) for the integration boundaries.
+
+## Persistence and separate Go workers
+
+Startup migrations and seeding preserve existing records. The original Python
+prototype's `.data/autocoder.db` is compatible: candidates, runs, jobs, proposals,
+write-backs, and audit history are retained. The old Python core has been removed;
+stop it before switching. Back up a valuable database before upgrading.
 
 ```sh
-uv run --frozen jobadder-autocoder --init-only
-AUTOCODER_EMBEDDED_WORKER=0 uv run --frozen jobadder-autocoder
-# In the second terminal:
-uv run --frozen jobadder-worker
+bin/garbage-truck --init-only
+AUTOCODER_EMBEDDED_WORKER=0 bin/garbage-truck
+# In another terminal, with the same database and document-worker setting:
+bin/garbage-worker
 ```
-
-Both processes must use the same file-backed database. Settings:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AUTOCODER_DATABASE_URL` | `sqlite:///.data/autocoder.db` | Local persistent database |
-| `AUTOCODER_EMBEDDED_WORKER` | `1` | `0` disables the web process's worker |
+| `AUTOCODER_DATABASE_PATH` | `.data/autocoder.db` | File-backed SQLite database |
+| `AUTOCODER_DATABASE_URL` | unset | Legacy `sqlite:///...` compatibility; path setting takes precedence |
+| `AUTOCODER_EMBEDDED_WORKER` | `1` | `0` runs web without an embedded worker |
 | `AUTOCODER_PAGE_SIZE` | `100` | Bounded pages, between 1 and 1,000 profiles |
+| `AUTOCODER_DOCUMENT_WORKER_URL` | unset | Optional local worker origin, normally port 8002 |
 
-This release deliberately accepts SQLite only. Postgres deployment needs its driver,
-claim implementation, migrations, and concurrency checks before it can be enabled.
-The abstraction boundaries prepare that transition; a configuration change alone is
-not a validated multi-worker production deployment.
+Keep database files, real CVs, and credentials out of Git. Live services are local
+only. Authentication and account isolation are required before shared deployment.
 
-## API and checks
+## API and validation
 
-Interactive API documentation is at the local `/api/docs` path. `/api/health` checks
-database access and identifies the synthetic mode. Every mutation needs a CSRF token:
-make a GET request first, retain its `gt_csrf` cookie, and send that value in the
-`X-CSRF-Token` header. HTML forms do this automatically. Cross-origin changes and
-unrecognized Host headers are rejected.
+The local `/api/docs` page links the OpenAPI schema. `/api/health` checks database
+access; `/api/fields` exposes 20 Kano reference mappings. Browser SPA mappings remain
+unverified for public API writes, and numeric custom IDs are account-specific.
+
+For core mutations, retain the `gt_csrf` cookie from a GET and send its value in
+`X-CSRF-Token`. Forms include it automatically. Cross-origin changes and unknown
+Host headers are rejected. Bodies and pagination are bounded.
 
 ```sh
-uv run --frozen ruff check src tests
-uv run --frozen ruff format --check src tests
-uv run --frozen mypy src/jobadder_autocoder
+bash scripts/go.sh vet ./...
+bash scripts/go.sh test -race -timeout 90s ./...
+uv run --frozen ruff check services/document_worker
+uv run --frozen ruff format --check services/document_worker
+uv run --frozen mypy services/document_worker/src/garbage_document_worker
 uv run --frozen pytest
 ```
 
-The tests cover read-only previews, field isolation, verbatim evidence, conflicting
-sources, stale profiles, duplicate/concurrent approvals, atomic rollback, undo after
-edits, retries, restart recovery, lease fencing, paging, HTML forms, and API behavior.
-A 1,010-profile synthetic run checks bounded processing; it does **not** establish
-accuracy on real CVs or throughput across the 200,000-profile JobAdder backlog.
+Checks cover workflow outcomes, field isolation, stale evidence, duplicate/concurrent
+approval and undo across database connections, rollback, retry privacy, restart
+recovery, lease fencing, bounded 1,010-profile processing, CSRF/forms, and untrusted
+document responses. They establish prototype behavior, not real-CV accuracy or
+throughput over the 200,000-profile JobAdder account.
 
-## Before live JobAdder access
-
-The next step is a **read-only** JobAdder adapter and gap sweep with OAuth and verified
-pagination/rate-limit handling. Register the app, define the actual Country field and
-picklist mapping, and use a test account or dummy candidates for integration tests.
-Credentials must be entered securely outside Git; none are needed for this prototype.
-
-Before enabling writes, verify partial-update semantics and conditional concurrency
-controls. A fresh read followed by a write still has a race. The synthetic connector
-uses an atomic version check; this guarantee must not be assumed for JobAdder.
-Authentication, account boundaries, secure token storage, real-data retention, CV
-parsing, LLM extraction, accuracy evaluation, and production deployment remain future work.
+Live integration starts with official OAuth read-only access, regional API URLs,
+pagination, throttling, and account field discovery. Verify partial-update and
+conditional-write semantics before enabling writes. Postgres, remote-write
+reconciliation, OCR/vision, and model accuracy evaluation follow the architecture plan.

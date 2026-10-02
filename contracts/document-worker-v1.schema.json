@@ -1,0 +1,158 @@
+{
+  "protocol_version": 1,
+  "request": {
+    "additionalProperties": false,
+    "properties": {
+      "protocol_version": {
+        "const": 1,
+        "title": "Protocol Version",
+        "type": "integer"
+      },
+      "candidate_id": {
+        "minimum": 1,
+        "title": "Candidate Id",
+        "type": "integer"
+      },
+      "source_id": {
+        "maxLength": 200,
+        "minLength": 1,
+        "title": "Source Id",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 200000,
+        "title": "Text",
+        "type": "string"
+      },
+      "fields": {
+        "items": {
+          "const": "country",
+          "type": "string"
+        },
+        "maxItems": 1,
+        "minItems": 1,
+        "title": "Fields",
+        "type": "array"
+      }
+    },
+    "required": [
+      "protocol_version",
+      "candidate_id",
+      "source_id",
+      "text",
+      "fields"
+    ],
+    "title": "ExtractRequest",
+    "type": "object"
+  },
+  "response": {
+    "$defs": {
+      "Evidence": {
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "const": "notes",
+            "title": "Source",
+            "type": "string"
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "quote"
+        ],
+        "title": "Evidence",
+        "type": "object"
+      },
+      "Extraction": {
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "confidence": {
+            "enum": [
+              "high",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/$defs/Evidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "confidence",
+          "evidence",
+          "reason"
+        ],
+        "title": "Extraction",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "protocol_version": {
+        "const": 1,
+        "default": 1,
+        "title": "Protocol Version",
+        "type": "integer"
+      },
+      "candidate_id": {
+        "title": "Candidate Id",
+        "type": "integer"
+      },
+      "source_id": {
+        "title": "Source Id",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "proposed",
+          "not_found"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "extraction": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Extraction"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "candidate_id",
+      "source_id",
+      "status",
+      "extraction"
+    ],
+    "title": "ExtractResponse",
+    "type": "object"
+  }
+}

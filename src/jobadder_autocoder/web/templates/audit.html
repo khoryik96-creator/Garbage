@@ -1,7 +1,0 @@
-{% extends "base.html" %}
-{% block title %}Audit trail{% endblock %}
-{% block content %}
-<section class="compact-heading"><div><p class="eyebrow">ACCOUNTABILITY</p><h1>A record of every decision.</h1><p class="intro">Run activity, review decisions, approved changes, and undo results.</p></div></section>
-<section class="card audit-list">{% for event in events %}<article><div><span class="audit-dot"></span><strong>{{ event.action.replace('_', ' ')|title }}</strong><small>{{ event.created_at|timestamp }}</small></div>{% if event.run_id %}<a href="/runs/{{ event.run_id }}">Run {{ event.run_id[:8] }}</a>{% endif %}{% if event.candidate_id %}<span class="muted"> · Profile #{{ event.candidate_id }}</span>{% endif %}{% if event.details %}<pre>{{ event.details|tojson(indent=2) }}</pre>{% endif %}</article>{% else %}<div class="empty-state"><h3>No events yet.</h3></div>{% endfor %}</section>
-{% if next_before %}<a class="button secondary" href="/audit?before={{ next_before }}">Older events →</a>{% endif %}
-{% endblock %}

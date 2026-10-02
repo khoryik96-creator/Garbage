@@ -1,0 +1,28 @@
+{{define "docs"}}{{template "top" .}}
+<section class="compact-heading">
+<div>
+<p class="eyebrow">DEVELOPER REFERENCE</p>
+<h1>The local API.</h1>
+<p class="intro">Synthetic profiles, Country-only runs, review, and audited undo.</p>
+</div>
+</section>
+<section class="card">
+<p>
+<a href="/api/openapi.json">OpenAPI schema</a> · <a href="/api/fields">Field catalogue</a> · <a href="/api/health">Health</a>
+</p>
+<p>Retain the <code>gt_csrf</code> cookie from a GET request. Send its value as <code>X-CSRF-Token</code> for mutations, with an <code>application/json</code> body where required.</p>
+<pre>POST /api/runs
+{"mode":"review","fields":["country"]}
+
+GET /api/runs/{id}
+GET /api/runs/{id}/suggestions
+POST /api/suggestions/{id}/approve  {}
+POST /api/suggestions/{id}/reject
+GET /api/runs/{id}/writebacks
+POST /api/writebacks/{id}/undo
+
+POST /api/runs/{id}/pause
+POST /api/runs/{id}/resume
+POST /api/runs/{id}/cancel</pre>
+<p>Only completed Review runs permit decisions. Pagination uses bounded limits and cursors. The Python document worker uses its own versioned extraction contract and has no write endpoints.</p>
+</section>{{template "bottom" .}}{{end}}
