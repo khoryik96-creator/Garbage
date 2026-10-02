@@ -15,6 +15,10 @@ Requirements: Go **1.27.1**, a C compiler for the embedded SQLite driver
 The cloud instance already has GCC. Go embeds SQLite, templates, CSS, country data,
 and field metadata in the compiled core; Python has no application database access.
 
+In this cloud image, prefix `uv` commands with
+`UV_CACHE_DIR=/tmp/garbage-uv-cache` because the default cache is read-only.
+The saved cloud install and startup instructions already select that cache.
+
 On Linux amd64, from this repository's root:
 
 ```sh
