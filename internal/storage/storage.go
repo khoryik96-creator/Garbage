@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -33,7 +34,12 @@ func Open(path string) (*Store, error) {
 	if err = os.MkdirAll(filepath.Dir(absolute), 0700); err != nil {
 		return nil, err
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
+	uriPath := filepath.ToSlash(absolute)
+	// Windows drive paths need /C:/... so the drive cannot become a URI host.
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath}
 	q := u.Query()
 	q.Set("_busy_timeout", "10000")
 	q.Set("_foreign_keys", "on")

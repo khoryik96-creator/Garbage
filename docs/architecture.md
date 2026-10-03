@@ -2,6 +2,7 @@
 
 ```mermaid
 flowchart LR
+  L[Installed app launcher] --> UI
   UI[Web and API in Go] --> R[Run and review operations]
   R --> P[Go policy and domain contracts]
   R --> DB[(Repositories and durable jobs)]
@@ -21,6 +22,14 @@ The Go core is a modular monolith. `domain` imports neither storage nor HTTP cod
 proposals. `connectors` own candidate access. `jobs` coordinates bounded work,
 `audit` owns decisions and writes, and `storage` owns the SQL transaction boundary.
 The web layer calls these operations and renders embedded templates.
+
+`application` initializes those services and owns graceful HTTP and job-worker
+shutdown for both hosts. `desktop` adds per-user storage, an operating-system
+process lock, a local port, and browser opening. It shares the web interface and
+business operations with the development command; installation adds no policy
+or database schema. The launcher can be replaced with a native window later
+without changing extraction, review, or connector modules. Packaged hosts include
+SQLite, assets, and Country rules and run without a separate development runtime.
 
 Python is a separate document/AI service with a narrow HTTP contract. It cannot
 access application storage or write candidates. Version 1 accepts bounded plain
