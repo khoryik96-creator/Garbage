@@ -42,6 +42,8 @@ jobs:
           CC: gcc
           PACKAGE_PLATFORM: ${{ matrix.platform }}
         run: |
+          set -o pipefail
+          {
           set -eu
           go mod download
           go vet ./...
@@ -58,6 +60,22 @@ jobs:
           go build -trimpath -tags "$tags" -ldflags "$flags" -o "$binary" ./cmd/garbage-truck-desktop
           python scripts/smoke-desktop.py --binary "$binary"
           python scripts/package-desktop.py --platform "$PACKAGE_PLATFORM" --arch "$(go env GOARCH)" --binary "$binary" --version "$version"
+          } 2>&1 | tee "$RUNNER_TEMP/garbage-desktop-build.log"
+      - name: Report native build failure
+        if: failure()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          log = Path(os.environ['RUNNER_TEMP']) / 'garbage-desktop-build.log'
+          if log.exists():
+              detail = '\n'.join(log.read_text(errors='replace').splitlines()[-80:])
+              escaped = detail.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print('::error title=Native build diagnostics::' + escaped)
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write('### Native build failure\n\n```text\n' + detail + '\n```\n')
+          PY
       - name: Windows installer preserves user data
         if: runner.os == 'Windows'
         shell: pwsh
