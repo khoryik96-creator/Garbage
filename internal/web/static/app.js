@@ -1,4 +1,17 @@
 const run = document.querySelector("[data-run-id]");
+const profileSearch = document.querySelector("[data-profile-search]");
+if (profileSearch) {
+  const rows = [...document.querySelectorAll("[data-profile-row]")];
+  profileSearch.addEventListener("input", () => {
+    const query = profileSearch.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const row of rows) {
+      row.hidden = !row.textContent.toLocaleLowerCase().includes(query);
+      if (!row.hidden) visible++;
+    }
+    document.querySelector("[data-profile-empty]").hidden = visible > 0;
+  });
+}
 if (run && ["queued", "running"].includes(run.dataset.runState)) {
   const timer = setInterval(async () => {
     // Preserve edits if the reviewer has started interacting with the form.

@@ -1,15 +1,16 @@
 {{define "dashboard"}}{{template "top" .}}
 <section class="page-heading">
 <div>
-<p class="eyebrow">YOUR CODING WORKSPACE</p>
-<h1>Turn missing data into<br>verified facts.</h1>
-<p class="intro">Find gaps, check the evidence, and fill Country with a clear record of every decision.</p>
+<p class="eyebrow">A LITTLE LESS MANUAL WORK</p>
+<h1>Your Country workspace.</h1>
+<p class="intro">Find missing information, review the evidence, and keep every decision in one place.</p>
 </div>
 <div class="edition">
-<span>01</span>
-<small>COUNTRY<br>FIRST FIELD</small>
+<span class="workspace-illustration">{{template "icon-arrow"}}</span>
+<small>ONE FIELD.<br>A CLEAR START.</small>
 </div>
 </section>
+{{if not .Runs}}<section class="welcome-guide" aria-label="Getting started"><div><span class="step-number">1</span><strong>Start with a preview</strong><p>See the gaps and proposed Country values.</p></div><div><span class="step-number">2</span><strong>Read the evidence</strong><p>Each proposal shows the original source.</p></div><div><span class="step-number">3</span><strong>Review when ready</strong><p>Approve changes individually. Undo is available.</p></div></section>{{end}}
 <section class="stats" aria-label="Country gap report">
 <article>
 <p>Profiles in this workspace</p>
@@ -30,7 +31,7 @@
 <small>Existing values are preserved</small>
 </article>
 </section>
-<section class="start-grid">
+<section class="start-grid" id="start-run">
 <article class="card">
 <div class="section-heading">
 <div>
@@ -55,7 +56,7 @@
 <option value="review">Review · approve each proposed change</option>
 </select>
 <p class="hint">Both modes scan the same profiles. Preview cannot approve changes; Review adds approval controls.</p>
-<button class="button primary" type="submit">Start Country run ↗</button>
+<button class="button primary" type="submit">Start Country run →</button>
 </form>
 </article>
 <aside class="assurance">
@@ -87,8 +88,7 @@
 <p class="eyebrow">RUN HISTORY</p>
 <h2>Your recent runs</h2>
 </div>
-<span class="muted">Latest {{len .Runs}}
-</span>
+<a class="muted" href="/runs">View run history →</a>
 </div>{{if .Runs}}
 <div class="table-wrap">
 <table>
@@ -127,7 +127,7 @@
 </table>
 </div>{{else}}
 <div class="empty-state">
-<span class="empty-mark" aria-hidden="true">↗</span>
+<span class="empty-mark">{{template "icon-arrow"}}</span>
 <h3>Your first run starts here.</h3>
 <p>Choose Preview to see the gap report and Country proposals.</p>
 </div>{{end}}

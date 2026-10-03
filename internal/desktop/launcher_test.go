@@ -1,0 +1,210 @@
+package desktop
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/khoryik96-creator/Garbage/internal/domain"
+	"github.com/khoryik96-creator/Garbage/internal/storage"
+)
+
+func TestLaunchReopenQuitAndRestartKeepsWorkspace(t *testing.T) {
+	t.Setenv("AUTOCODER_DOCUMENT_WORKER_URL", "")
+	directory := filepath.Join(t.TempDir(), "workspace with spaces")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	opened := make(chan string, 4)
+	launch := func() chan error {
+		finished := make(chan error, 1)
+		go func() {
+			finished <- Run(ctx, Options{DataDirectory: directory, OpenBrowser: func(url string) error { opened <- url; return nil }})
+		}()
+		return finished
+	}
+	awaitURL := func() string {
+		t.Helper()
+		select {
+		case value := <-opened:
+			return value
+		case <-ctx.Done():
+			t.Fatal("launcher did not open the UI")
+			return ""
+		}
+	}
+	finished := launch()
+	base := awaitURL()
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar, Timeout: 3 * time.Second}
+	response, err := client.Get(base + "settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != 200 || !strings.Contains(string(body), "Save and quit app") || !strings.Contains(string(body), directory) {
+		t.Fatal("installed workspace settings are missing")
+	}
+	u, _ := url.Parse(base)
+	csrf := ""
+	for _, cookie := range jar.Cookies(u) {
+		if cookie.Name == "gt_csrf" {
+			csrf = cookie.Value
+		}
+	}
+	if csrf == "" {
+		t.Fatal("desktop CSRF protection missing")
+	}
+	request, _ := http.NewRequest(http.MethodPost, base+"api/runs", strings.NewReader(`{"mode":"review","fields":["country"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-CSRF-Token", csrf)
+	response, err = client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run domain.Run
+	err = json.NewDecoder(response.Body).Decode(&run)
+	response.Body.Close()
+	if err != nil || response.StatusCode != 202 {
+		t.Fatal("desktop run did not start", err)
+	}
+	for {
+		response, err = client.Get(base + "api/runs/" + run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = json.NewDecoder(response.Body).Decode(&run)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.State == "completed" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("run did not finish")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if run.Processed != 10 || run.Proposed != 6 {
+		t.Fatalf("desktop changed workflow results: %+v", run)
+	}
+	if err = Run(ctx, Options{DataDirectory: directory, OpenBrowser: func(url string) error { opened <- url; return nil }}); err != nil {
+		t.Fatal("second launch did not reopen", err)
+	}
+	if reused := awaitURL(); reused != base {
+		t.Fatal("second launch opened a different database/server")
+	}
+	select {
+	case <-finished:
+		t.Fatal("reopening stopped the original app")
+	default:
+	}
+	response, err = client.PostForm(base+"desktop/quit", url.Values{"_csrf": {"wrong"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 403 {
+		t.Fatal("quit bypassed CSRF protection")
+	}
+	response, err = client.PostForm(base+"desktop/quit", url.Values{"_csrf": {csrf}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != 200 || !strings.Contains(string(body), "Your work is saved.") || strings.Contains(string(body), "/static/") {
+		t.Fatal("quit did not return a self-contained saved-work page")
+	}
+	select {
+	case err = <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("desktop did not quit")
+	}
+	if _, err = os.Stat(filepath.Join(directory, "instance.json")); !os.IsNotExist(err) {
+		t.Fatal("quit left a stale instance record")
+	}
+	store, err := storage.Open(filepath.Join(directory, "autocoder.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved domain.Run
+	err = store.Transaction(func(r *storage.Repository) error { var err error; saved, err = r.Run(run.ID); return err })
+	store.Close()
+	if err != nil || saved.Processed != 10 {
+		t.Fatal("quit lost the completed run")
+	}
+	finished = launch()
+	base = awaitURL()
+	response, err = client.Get(base + "api/runs/" + run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = json.NewDecoder(response.Body).Decode(&saved)
+	response.Body.Close()
+	if err != nil || saved.ID != run.ID || saved.Proposed != 6 {
+		t.Fatal("restart reset the saved workspace")
+	}
+	cancel()
+	select {
+	case err = <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("desktop context cancellation did not stop")
+	}
+}
+
+func TestReopenDoesNotTrustAnotherLocalService(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"instance_id":"another_application"}`)
+	}))
+	defer server.Close()
+	directory := t.TempDir()
+	unlock, err := acquire(filepath.Join(directory, "app.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	data, _ := json.Marshal(instance{URL: server.URL + "/", ID: domain.ID()})
+	if err = os.WriteFile(filepath.Join(directory, "instance.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	opened := false
+	err = Run(ctx, Options{DataDirectory: directory, OpenBrowser: func(string) error { opened = true; return nil }})
+	if err == nil || opened {
+		t.Fatal("launcher reused an unrelated service")
+	}
+}
+
+func TestInstanceRecordRejectsExternalOrMalformedURLs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "instance.json")
+	for _, address := range []string{"https://127.0.0.1:8000/", "http://example.com:8000/", "http://user:pass@127.0.0.1:8000/", "http://127.0.0.1:8000/path", "http://127.0.0.1:8000/?redirect=1", "http://127.0.0.1:8000/#fragment", "http://127.0.0.1/", "http://127.0.0.1:99999/"} {
+		t.Run(address, func(t *testing.T) {
+			data, _ := json.Marshal(instance{URL: address, ID: domain.ID()})
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readInstance(path); err == nil {
+				t.Fatal("untrusted URL accepted")
+			}
+		})
+	}
+}

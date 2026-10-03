@@ -4,33 +4,48 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Country workspace · Garbage Truck</title>
+<meta name="theme-color" content="#164435">
+<title>{{.PageTitle}} · Garbage Truck</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer>
 </script>
 </head>
 <body>
-<header class="topbar">
+<a class="skip-link" href="#main-content">Skip to content</a>
+<aside class="app-sidebar">
 <a class="brand" href="/">
-<span class="brand-mark" aria-hidden="true">G</span>
-<span>Garbage Truck<small>JobAdder auto-coder</small>
+<img class="app-logo" src="/static/icon.svg" width="38" height="38" alt="">
+<span>Garbage Truck<small>Candidate coding</small>
 </span>
 </a>
 <nav aria-label="Main navigation">
-<a href="/" {{if eq .Path "/"}}aria-current="page"{{end}}>Workspace</a>
-<a href="/profiles" {{if eq .Path "/profiles"}}aria-current="page"{{end}}>Profiles</a>
-<a href="/audit" {{if eq .Path "/audit"}}aria-current="page"{{end}}>Audit trail</a>
+<p class="nav-caption">WORKSPACE</p>
+<a href="/" {{if eq .Path "/"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-overview"}}</span>Overview</a>
+<a href="/runs" {{if prefix .Path "/runs"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-runs"}}</span>Run history</a>
+<a href="/profiles" {{if eq .Path "/profiles"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-profiles"}}</span>Profiles</a>
+<a href="/audit" {{if eq .Path "/audit"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-audit"}}</span>Audit trail</a>
+<p class="nav-caption">PREFERENCES</p>
+<a href="/settings" {{if eq .Path "/settings"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-settings"}}</span>Workspace settings</a>
 </nav>
-<span class="demo-badge">
-<span class="dot">
-</span>Synthetic demo</span>
+<div class="sidebar-bottom">
+<div class="workspace-card"><span class="workspace-avatar" aria-hidden="true">D</span><div><strong>Demo workspace</strong><small>Sample profiles · Local data</small></div></div>
+{{if .Desktop}}<form action="/desktop/quit" method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="quit-button" type="submit">Quit Garbage Truck</button></form>{{end}}
+<small class="sidebar-version">{{if .Version}}Version {{.Version}}{{else}}Development workspace{{end}}</small>
+</div>
+</aside>
+<div class="application-shell">
+<header class="workspace-bar">
+<div class="breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong>{{.PageTitle}}</strong></div>
+<div class="header-actions"><span class="demo-badge"><span class="dot"></span>Demo data</span><a class="button primary small" href="/#start-run">＋ New run</a></div>
 </header>
-<main>{{end}}
+<main id="main-content" tabindex="-1">{{end}}
 {{define "bottom"}}
 </main>
 <footer>
-<span>Garbage Truck · Prototype 0.2</span>
-<span>Demo profiles only · No JobAdder connection · No AI calls</span>
+<span>Garbage Truck · Your workspace, on your computer</span>
+<span>Demo profiles · JobAdder connection coming next</span>
 </footer>
+</div>
 </body>
 </html>{{end}}

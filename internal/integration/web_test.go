@@ -53,7 +53,7 @@ func startBrowser(t *testing.T) browser {
 }
 func TestPagesCatalogueAndPagination(t *testing.T) {
 	b := startBrowser(t)
-	for _, path := range []string{"/", "/profiles", "/audit", "/static/app.css", "/static/app.js", "/api/docs", "/api/openapi.json", "/api/health", "/api/fields"} {
+	for _, path := range []string{"/", "/runs", "/settings", "/profiles", "/audit", "/static/app.css", "/static/app.js", "/static/icon.svg", "/api/docs", "/api/openapi.json", "/api/health", "/api/fields"} {
 		t.Run(path, func(t *testing.T) {
 			r := b.request("GET", path, "", false)
 			if r.Code != 200 {
@@ -75,6 +75,17 @@ func TestPagesCatalogueAndPagination(t *testing.T) {
 		if r := b.request("GET", path, "", false); r.Code != 422 {
 			t.Fatal("bad pagination accepted")
 		}
+	}
+}
+
+func TestDeveloperHostDoesNotOfferDesktopShutdown(t *testing.T) {
+	b := startBrowser(t)
+	settings := b.request("GET", "/settings", "", false)
+	if !strings.Contains(settings.Body.String(), "Your demo workspace") || !strings.Contains(settings.Body.String(), "Not connected") || strings.Contains(settings.Body.String(), "/desktop/quit") {
+		t.Fatal("settings misrepresented connection or host")
+	}
+	if b.request("POST", "/desktop/quit", "", true).Code != 404 {
+		t.Fatal("developer web host exposed desktop shutdown")
 	}
 }
 func TestStrictRequestsAndCSRF(t *testing.T) {

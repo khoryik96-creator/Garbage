@@ -13,6 +13,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -31,10 +32,23 @@ type App struct {
 	Review         *audit.Review
 	Templates      *template.Template
 	EmbeddedWorker bool
+	Options        Options
+}
+
+// Options describes the host; installed and developer workspaces share the same UI.
+type Options struct {
+	Version         string
+	DatabasePath    string
+	DocumentWorker  bool
+	DesktopInstance string
+	Shutdown        func()
 }
 
 func New(s *storage.Store, embedded bool) (http.Handler, error) {
-	functions := template.FuncMap{"short": func(s string) string { return s[:min(8, len(s))] }, "shortPointer": func(s *string) string {
+	return NewWithOptions(s, embedded, Options{})
+}
+func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Handler, error) {
+	functions := template.FuncMap{"prefix": strings.HasPrefix, "short": func(s string) string { return s[:min(8, len(s))] }, "shortPointer": func(s *string) string {
 		if s == nil {
 			return ""
 		}
@@ -65,7 +79,7 @@ func New(s *storage.Store, embedded bool) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &App{Store: s, Review: audit.New(s), Templates: templates, EmbeddedWorker: embedded}
+	a := &App{Store: s, Review: audit.New(s), Templates: templates, EmbeddedWorker: embedded, Options: options}
 	mux := http.NewServeMux()
 	static, _ := fs.Sub(assets, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
@@ -92,6 +106,23 @@ func New(s *storage.Store, embedded bool) (http.Handler, error) {
 	mux.HandleFunc("GET /{$}", a.dashboard)
 	mux.HandleFunc("GET /profiles", a.profiles)
 	mux.HandleFunc("GET /audit", a.auditPage)
+	mux.HandleFunc("GET /runs", a.runsPage)
+	mux.HandleFunc("GET /settings", a.settingsPage)
+	if options.DesktopInstance != "" && options.Shutdown != nil {
+		mux.HandleFunc("GET /api/desktop/instance", func(w http.ResponseWriter, r *http.Request) {
+			jsonResponse(w, 200, map[string]string{"instance_id": options.DesktopInstance})
+		})
+		mux.HandleFunc("POST /desktop/quit", func(w http.ResponseWriter, r *http.Request) {
+			if err := formKeys(r, "_csrf"); err != nil {
+				a.fail(w, r, err, 0)
+				return
+			}
+			nonce := domain.ID()
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+nonce+"'; frame-ancestors 'none'; base-uri 'none'")
+			a.render(w, r, "closed", map[string]any{"ClosedNonce": nonce}, 200)
+			go options.Shutdown()
+		})
+	}
 	mux.HandleFunc("GET /runs/{id}", a.runPage)
 	mux.HandleFunc("POST /runs", a.newRun)
 	mux.HandleFunc("POST /runs/{id}/{action}", a.changeRun)
@@ -238,6 +269,10 @@ func (a *App) render(w http.ResponseWriter, r *http.Request, name string, data m
 	data["CSRF"] = token
 	data["Path"] = r.URL.Path
 	data["Countries"] = policy.Countries
+	data["Desktop"] = a.Options.DesktopInstance != "" && a.Options.Shutdown != nil
+	data["Version"] = a.Options.Version
+	titles := map[string]string{"dashboard": "Overview", "runs": "Run history", "run": "Country review", "profiles": "Profiles", "audit": "Audit trail", "settings": "Workspace settings", "docs": "API reference", "closed": "App closed", "error": "Something needs attention"}
+	data["PageTitle"] = titles[name]
 	var output bytes.Buffer
 	if err := a.Templates.ExecuteTemplate(&output, name, data); err != nil {
 		http.Error(w, "Unable to render page.", 500)
@@ -547,6 +582,35 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	a.render(w, r, "dashboard", data, 200)
 }
+func (a *App) runsPage(w http.ResponseWriter, r *http.Request) {
+	var runs []domain.Run
+	err := a.Store.Transaction(func(repo *storage.Repository) error { var err error; runs, err = repo.Runs(); return err })
+	if err != nil {
+		a.fail(w, r, err, 0)
+		return
+	}
+	a.render(w, r, "runs", map[string]any{"Runs": runs}, 200)
+}
+
+func (a *App) settingsPage(w http.ResponseWriter, r *http.Request) {
+	var counts domain.Counts
+	err := a.Store.Transaction(func(repo *storage.Repository) error { var err error; counts, err = repo.Counts(); return err })
+	if err != nil {
+		a.fail(w, r, err, 0)
+		return
+	}
+	directory := ""
+	if a.Options.DatabasePath != "" {
+		path, err := filepath.Abs(a.Options.DatabasePath)
+		if err != nil {
+			a.fail(w, r, err, 0)
+			return
+		}
+		directory = filepath.Dir(path)
+	}
+	a.render(w, r, "settings", map[string]any{"Counts": counts, "DataDirectory": directory, "DocumentWorker": a.Options.DocumentWorker, "EmbeddedWorker": a.EmbeddedWorker}, 200)
+}
+
 func (a *App) runPage(w http.ResponseWriter, r *http.Request) {
 	data := map[string]any{}
 	err := a.Store.Transaction(func(repo *storage.Repository) error {

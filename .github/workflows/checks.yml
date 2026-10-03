@@ -15,7 +15,8 @@ jobs:
       - run: test -z "$(gofmt -l cmd internal)"
       - run: go vet ./...
       - run: go test -race -timeout 90s ./...
-      - run: go build ./cmd/garbage-truck ./cmd/garbage-worker
+      - run: go build ./cmd/garbage-truck ./cmd/garbage-worker ./cmd/garbage-truck-desktop
+      - run: python3 -m unittest discover -s scripts/tests -v
   python:
     runs-on: ubuntu-latest
     steps:
@@ -26,7 +27,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run --frozen ruff check services/document_worker
-      - run: uv run --frozen ruff format --check services/document_worker
+      - run: uv run --frozen ruff check services/document_worker scripts
+      - run: uv run --frozen ruff format --check services/document_worker scripts
       - run: uv run --frozen mypy services/document_worker/src/garbage_document_worker
       - run: uv run --frozen pytest

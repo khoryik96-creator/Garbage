@@ -8,7 +8,27 @@ This release uses **synthetic profiles only**. The document worker currently rea
 plain text with deterministic residence rules. JobAdder OAuth, PDF/OCR, vision,
 and LLM providers remain integration work; no credentials or paid model calls are needed.
 
-## Run it
+## Install the app
+
+Download a package from [Desktop preview 0.3.0](https://github.com/khoryik96-creator/Garbage/releases/tag/v0.3.0).
+
+- **Windows 10/11, x64:** run `Garbage-Truck-0.3.0-windows-amd64-Setup.exe`, click
+  Install, then open **Garbage Truck** from the Start menu or desktop shortcut.
+- **macOS:** extract the ZIP for your processor, drag **Garbage Truck.app** to
+  Applications, and open it.
+- **Linux:** extract the TAR.GZ and run `sh install.sh`, or open the included executable directly.
+
+The interface opens automatically in your default browser. The packaged Country
+demo needs no Go, Python, or Docker installation. It runs locally, saves your work
+automatically, and reopens the same workspace when you launch it again. Use
+**Quit Garbage Truck** in the sidebar to stop the app. Upgrading and uninstalling
+keep your saved data.
+
+These prototype packages are unsigned; Windows and macOS may ask you to allow
+the app. JobAdder and AI connections remain future integration work. See
+[installation and backups](docs/installation.md) for details and the portable option.
+
+## Run from source
 
 Requirements: Go **1.27.1**, a C compiler for the embedded SQLite driver
 (`CGO_ENABLED=1`), Python 3.12+, and [uv](https://docs.astral.sh/uv/).
@@ -54,6 +74,19 @@ $env:AUTOCODER_DOCUMENT_WORKER_URL = "http://127.0.0.1:8002"
 .\bin\garbage-truck.exe
 ```
 
+To build the desktop launcher on your own platform, use Go and a C compiler:
+
+```sh
+go build -o garbage-truck-desktop ./cmd/garbage-truck-desktop
+./garbage-truck-desktop
+```
+
+In this cloud, use `bash scripts/go.sh build -o bin/garbage-truck-desktop ./cmd/garbage-truck-desktop`
+and `bin/garbage-truck-desktop --no-browser --data-dir /tmp/garbage-desktop-demo`.
+Desktop data uses the user's application-data folder; developer web runs retain
+`.data/autocoder.db`. Pass `--data-dir` to the desktop host to select an existing
+workspace folder. The installer builds are automated by `desktop-release.yml`.
+
 Explicit address evidence stays in Go. Notes go through the optional Python worker.
 Go validates response identity, protocol, country, and source quotes before storing
 proposals. Both paths produce the same demo outcomes. Worker failures use durable,
@@ -78,6 +111,9 @@ evidence. Pause, resume, and cancel retain committed progress.
 ```text
 cmd/garbage-truck/       Go web process, with an optional embedded job worker
 cmd/garbage-worker/      Independently runnable Go job worker
+cmd/garbage-truck-desktop/ Installed app launcher
+internal/application/   Shared app initialization and graceful shutdown
+internal/desktop/       Per-user workspace, one running instance, browser opening
 internal/domain/        Typed models, provider interfaces, versioned field catalogue
 internal/policy/        Missing-field and evidence checks, country normalization
 internal/pipeline/      Deterministic residence extraction
@@ -89,6 +125,7 @@ internal/web/           HTTP API, server-rendered UI, embedded assets
 internal/docworker/     Local Python-worker client and response validation
 services/document_worker/  Python extraction service and tests
 contracts/              Versioned document-worker JSON schema
+packaging/              Windows installer and desktop package assets
 ```
 
 The Python worker returns proposals; Go owns policy and all writes. The
@@ -140,6 +177,7 @@ uv run --frozen ruff check services/document_worker
 uv run --frozen ruff format --check services/document_worker
 uv run --frozen mypy services/document_worker/src/garbage_document_worker
 uv run --frozen pytest
+python3 -m unittest discover -s scripts/tests -v
 ```
 
 Checks cover workflow outcomes, field isolation, stale evidence, duplicate/concurrent

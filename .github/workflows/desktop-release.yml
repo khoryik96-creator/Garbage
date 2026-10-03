@@ -1,0 +1,115 @@
+name: Desktop installers
+on:
+  push:
+    branches: [main, chatgpt/simple-desktop-install]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+          - runner: windows-latest
+            platform: windows
+          - runner: macos-latest
+            platform: macos
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Windows build tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          'C:\msys64\mingw64\bin' | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          if (!(Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) { choco install nsis --yes --no-progress }
+          'C:\Program Files (x86)\NSIS' | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Verify and build native host
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+          CC: gcc
+          PACKAGE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -eu
+          go mod download
+          go vet ./...
+          go test -race -timeout 90s ./...
+          mkdir -p dist
+          version=0.3.0
+          if [ "$GITHUB_REF_TYPE" = tag ]; then version="${GITHUB_REF_NAME#v}"; fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo 'Invalid release version'; exit 1; fi
+          binary=dist/garbage-truck-desktop
+          flags="-s -w -X github.com/khoryik96-creator/Garbage/internal/application.Version=$version"
+          tags='sqlite_omit_load_extension'
+          if [ "$PACKAGE_PLATFORM" = windows ]; then binary="$binary.exe"; flags="$flags -H=windowsgui -linkmode=external -extldflags=-static"; fi
+          if [ "$PACKAGE_PLATFORM" = linux ]; then flags="$flags -linkmode=external -extldflags=-static"; tags="$tags,netgo,osusergo"; fi
+          go build -trimpath -tags "$tags" -ldflags "$flags" -o "$binary" ./cmd/garbage-truck-desktop
+          python scripts/smoke-desktop.py --binary "$binary"
+          python scripts/package-desktop.py --platform "$PACKAGE_PLATFORM" --arch "$(go env GOARCH)" --binary "$binary" --version "$version"
+      - name: Windows installer preserves user data
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = (Get-ChildItem dist/*-Setup.exe).FullName
+          $result = Start-Process $setup -ArgumentList '/S' -PassThru -Wait
+          if ($result.ExitCode -ne 0) { throw 'Installer failed' }
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Garbage Truck\Garbage Truck.exe'
+          if (!(Test-Path $app)) { throw 'Installed app is missing' }
+          python scripts/smoke-desktop.py --binary $app
+          if ($LASTEXITCODE -ne 0) { throw 'Installed app smoke check failed' }
+          $data = Join-Path $env:LOCALAPPDATA 'GarbageTruck'
+          New-Item -ItemType Directory -Force $data | Out-Null
+          $marker = Join-Path $data 'preserve-check.txt'
+          Set-Content $marker 'keep my saved workspace'
+          $result = Start-Process $setup -ArgumentList '/S' -PassThru -Wait
+          if ($result.ExitCode -ne 0 -or !(Test-Path $marker)) { throw 'Upgrade did not preserve data' }
+          $uninstall = Join-Path $env:LOCALAPPDATA 'Programs\Garbage Truck\Uninstall.exe'
+          Start-Process $uninstall -ArgumentList '/S' -Wait
+          Start-Sleep -Seconds 2
+          if (!(Test-Path $marker)) { throw 'Uninstall removed saved data' }
+          if (Test-Path $app) { throw 'Uninstall did not remove the application' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: dist/Garbage-Truck-*
+          if-no-files-found: error
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Publish demo installer release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          cat > notes.md <<'EOF'
+          Garbage Truck now includes an app interface and desktop launchers.
+
+          Windows: download the Setup.exe installer, install, and open the Garbage Truck shortcut. No Go or Python installation is needed.
+          macOS: extract the matching ZIP and drag Garbage Truck.app to Applications.
+          Linux: extract the TAR.GZ and run sh install.sh, or open the included executable directly.
+
+          The interface opens in your browser. Quit from the app menu; reopening keeps your workspace. This prerelease uses demo profiles and includes Country preview, review, approval, audit, and guarded undo. JobAdder OAuth and AI document processing are not enabled. The installers are unsigned, so Windows/macOS may display a publisher warning. Native host and installer checks run before publishing. SHA-256 files accompany every download.
+          EOF
+          gh release create "$GITHUB_REF_NAME" release/* --verify-tag --prerelease --title "Garbage Truck ${GITHUB_REF_NAME} · Desktop preview" --notes-file notes.md
