@@ -1,0 +1,45 @@
+[project]
+name = "garbage-document-worker"
+version = "0.2.0"
+description = "The document and AI processing boundary for the Garbage Truck Go core."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "pydantic>=2.10,<3",
+  "pycountry>=24.6.1,<25",
+  "uvicorn>=0.34,<1",
+]
+
+[dependency-groups]
+dev = ["httpx>=0.28,<1", "mypy>=1.15,<2", "pytest>=8.3,<10", "ruff>=0.11,<1"]
+
+[project.scripts]
+garbage-document-worker = "garbage_document_worker.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["services/document_worker/src/garbage_document_worker"]
+
+[tool.pytest.ini_options]
+testpaths = ["services/document_worker/tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["services/document_worker/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["garbage_document_worker"]
+
+[[tool.mypy.overrides]]
+module = ["pycountry.*"]
+ignore_missing_imports = true

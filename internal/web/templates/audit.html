@@ -1,0 +1,30 @@
+{{define "audit"}}{{template "top" .}}
+<section class="compact-heading">
+<div>
+<p class="eyebrow">ACCOUNTABILITY</p>
+<h1>A record of every decision.</h1>
+<p class="intro">Run activity, review decisions, approved changes, and undo results.</p>
+</div>
+</section>
+<section class="card audit-list">{{range .Events}}
+<article>
+<div>
+<span class="audit-dot">
+</span>
+<strong>{{title .Action}}
+</strong>
+<small>{{timestamp .CreatedAt}}
+</small>
+</div>{{if .RunID}}
+<a href="/runs/{{.RunID}}">Run {{shortPointer .RunID}}
+</a>{{end}}{{if .CandidateID}}
+<span class="muted"> · Profile #{{.CandidateID}}
+</span>{{end}}
+<pre>{{jsonPretty .Details}}
+</pre>
+</article>{{else}}
+<div class="empty-state">
+<h3>No events yet.</h3>
+</div>{{end}}
+</section>{{if .NextBefore}}
+<a class="button secondary" href="/audit?before={{.NextBefore}}&before_id={{.NextBeforeID}}">Older events →</a>{{end}}{{template "bottom" .}}{{end}}

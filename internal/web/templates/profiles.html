@@ -1,0 +1,39 @@
+{{define "profiles"}}{{template "top" .}}
+<section class="compact-heading">
+<div>
+<p class="eyebrow">SOURCE RECORDS</p>
+<h1>The demo profiles.</h1>
+<p class="intro">Synthetic records covering empty fields, existing values, missing evidence, and conflicting sources.</p>
+</div>
+</section>
+<section class="card">
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>Profile</th>
+<th>Current Country</th>
+<th>Address country</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>{{range .Page.Candidates}}
+<tr>
+<td>
+<strong>{{.Name}}
+</strong>
+<small class="cell-sub">#{{.ID}}
+</small>
+</td>
+<td>{{country .Country}}
+</td>
+<td>{{emptyValue .AddressCountry}}
+</td>
+<td class="notes-cell">{{.Notes}}
+</td>
+</tr>{{end}}
+</tbody>
+</table>
+</div>
+</section>{{if not .Page.Finished}}
+<a class="button secondary" href="/profiles?after={{.Page.Cursor}}">Next profiles →</a>{{end}}{{template "bottom" .}}{{end}}

@@ -1,0 +1,134 @@
+{{define "dashboard"}}{{template "top" .}}
+<section class="page-heading">
+<div>
+<p class="eyebrow">YOUR CODING WORKSPACE</p>
+<h1>Turn missing data into<br>verified facts.</h1>
+<p class="intro">Find gaps, check the evidence, and fill Country with a clear record of every decision.</p>
+</div>
+<div class="edition">
+<span>01</span>
+<small>COUNTRY<br>FIRST FIELD</small>
+</div>
+</section>
+<section class="stats" aria-label="Country gap report">
+<article>
+<p>Profiles in this workspace</p>
+<strong>{{.Counts.Total}}
+</strong>
+<small>Synthetic candidate records</small>
+</article>
+<article>
+<p>Missing Country</p>
+<strong>{{.Counts.Missing}}
+</strong>
+<small>Empty fields eligible for a run</small>
+</article>
+<article>
+<p>Already filled</p>
+<strong>{{.Counts.Existing}}
+</strong>
+<small>Existing values are preserved</small>
+</article>
+</section>
+<section class="start-grid">
+<article class="card">
+<div class="section-heading">
+<div>
+<p class="eyebrow">START A RUN</p>
+<h2>Choose how to begin.</h2>
+</div>
+<span class="tag">All profiles</span>
+</div>
+<form action="/runs" method="post" class="run-form">
+<input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label class="field-choice">
+<input type="checkbox" name="fields" value="country" checked required>
+<span>
+<strong>Country</strong>
+<small>Fill only truly empty Country fields</small>
+</span>
+<span class="tag">Selected</span>
+</label>
+<label for="mode">Run mode</label>
+<select name="mode" id="mode">
+<option value="preview">Preview · inspect proposals without changes</option>
+<option value="review">Review · approve each proposed change</option>
+</select>
+<p class="hint">Both modes scan the same profiles. Preview cannot approve changes; Review adds approval controls.</p>
+<button class="button primary" type="submit">Start Country run ↗</button>
+</form>
+</article>
+<aside class="assurance">
+<p class="eyebrow">A FEW RULES, ALWAYS</p>
+<h2>Your data stays<br>under your control.</h2>
+<ol>
+<li>
+<strong>Only the field you choose.</strong>
+<span>This prototype handles Country.</span>
+</li>
+<li>
+<strong>Only when it is empty.</strong>
+<span>Existing values, including “Unknown,” are kept.</span>
+</li>
+<li>
+<strong>Evidence before action.</strong>
+<span>Conflicting sources need your decision.</span>
+</li>
+<li>
+<strong>A trace of every change.</strong>
+<span>Approvals are audited and support guarded undo.</span>
+</li>
+</ol>
+</aside>
+</section>
+<section class="card runs-section">
+<div class="section-heading">
+<div>
+<p class="eyebrow">RUN HISTORY</p>
+<h2>Your recent runs</h2>
+</div>
+<span class="muted">Latest {{len .Runs}}
+</span>
+</div>{{if .Runs}}
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Mode</th>
+<th>Progress</th>
+<th>Missing</th>
+<th>Proposals</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>{{range .Runs}}
+<tr>
+<td>
+<a class="run-link" href="/runs/{{.ID}}">Country · {{short .ID}}
+</a>
+<small class="cell-sub">{{timestamp .CreatedAt}}
+</small>
+</td>
+<td>{{title .Mode}}
+</td>
+<td>{{.Processed}} / {{.Total}}
+</td>
+<td>{{.Missing}}
+</td>
+<td>{{.Proposed}}
+</td>
+<td>
+<span class="status state-{{.State}}">{{title .State}}
+</span>
+</td>
+</tr>{{end}}
+</tbody>
+</table>
+</div>{{else}}
+<div class="empty-state">
+<span class="empty-mark" aria-hidden="true">↗</span>
+<h3>Your first run starts here.</h3>
+<p>Choose Preview to see the gap report and Country proposals.</p>
+</div>{{end}}
+</section>{{template "bottom" .}}{{end}}
