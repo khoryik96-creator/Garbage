@@ -2,6 +2,7 @@ package docworker
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,18 +43,29 @@ func New(base string) (*Client, error) {
 	}
 	return &Client{URL: strings.TrimSuffix(base, "/"), HTTP: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
-func (c *Client) ExtractCountry(candidate domain.Candidate) (*domain.Extraction, error) {
+func (c *Client) ExtractCountry(ctx context.Context, candidate domain.Candidate) (*domain.Extraction, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Explicit address evidence stays in the Go policy path. Notes can exercise the document boundary.
 	if !domain.Empty(candidate.AddressCountry) {
-		return (pipeline.RuleCountryExtractor{}).ExtractCountry(candidate)
+		return (pipeline.RuleCountryExtractor{}).ExtractCountry(ctx, candidate)
 	}
 	request := Request{ProtocolVersion: 1, CandidateID: candidate.ID, SourceID: fmt.Sprintf("candidate:%d:notes:v%d", candidate.ID, candidate.Version), Text: candidate.Notes, Fields: []string{"country"}}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}
-	response, err := c.HTTP.Post(c.URL+"/v1/extract", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/extract", bytes.NewReader(body))
 	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	response, err := c.HTTP.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("document worker unavailable")
 	}
 	defer response.Body.Close()
@@ -83,7 +95,7 @@ func (c *Client) ExtractCountry(candidate domain.Candidate) (*domain.Extraction,
 	}
 	// The prototype accepts only deterministic, labelled residence evidence. Adding a model
 	// requires a separate policy and evaluation change, never a weaker evidence check.
-	expected, err := (pipeline.RuleCountryExtractor{}).ExtractCountry(candidate)
+	expected, err := (pipeline.RuleCountryExtractor{}).ExtractCountry(ctx, candidate)
 	if err != nil {
 		return nil, err
 	}

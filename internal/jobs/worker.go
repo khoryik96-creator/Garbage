@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/khoryik96-creator/Garbage/internal/connectors"
@@ -27,16 +28,22 @@ func New(s *storage.Store, pageSize int) *Worker {
 	return &Worker{Store: s, PageSize: pageSize, LeaseSeconds: 60, MaxAttempts: 5, Clock: storage.Now, Extractor: pipeline.RuleCountryExtractor{}, Gateway: connectors.Factory}
 }
 func (w *Worker) ProcessOne() (bool, error) {
+	return w.ProcessOneContext(context.Background())
+}
+func (w *Worker) ProcessOneContext(ctx context.Context) (bool, error) {
 	var claim *domain.Claim
-	err := w.Store.Transaction(func(r *storage.Repository) error {
+	err := w.Store.TransactionContext(ctx, func(r *storage.Repository) error {
 		var err error
-		claim, err = r.Claim(w.Clock(), w.LeaseSeconds)
+		claim, err = r.Claim(w.Clock(), w.LeaseSeconds, w.MaxAttempts)
 		return err
 	})
 	if err != nil || claim == nil {
 		return false, err
 	}
-	err = w.ProcessClaim(*claim)
+	err = w.ProcessClaimContext(ctx, *claim)
+	if ctx.Err() != nil {
+		return true, w.Store.Transaction(func(r *storage.Repository) error { return r.Release(*claim) })
+	}
 	if err == nil || errors.Is(err, domain.ErrLease) {
 		return true, nil
 	}
@@ -49,9 +56,52 @@ func (w *Worker) ProcessOne() (bool, error) {
 	return true, retryErr
 }
 func (w *Worker) ProcessClaim(claim domain.Claim) error {
+	return w.ProcessClaimContext(context.Background(), claim)
+}
+func (w *Worker) ProcessClaimContext(parent context.Context, claim domain.Claim) error {
+	ctx, cancel := context.WithCancelCause(parent)
+	renew := func() error {
+		return w.Store.TransactionContext(ctx, func(r *storage.Repository) error {
+			return r.Renew(claim, w.Clock(), w.LeaseSeconds)
+		})
+	}
+	// Poll run ownership during a request as well as between profiles. Losing the
+	// token (pause/cancel/reclaim) cancels in-flight document HTTP requests promptly.
+	interval := min(time.Duration(w.LeaseSeconds*float64(time.Second)/3), 250*time.Millisecond)
+	if interval <= 0 {
+		cancel(domain.ErrLease)
+		return domain.ErrLease
+	}
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := renew(); err != nil {
+					cancel(err)
+					return
+				}
+			}
+		}
+	}()
+	stopHeartbeat := sync.OnceFunc(func() { close(stop); <-done })
+	defer func() { cancel(nil); stopHeartbeat() }()
+	pageErr := func(err error) error {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+		return err
+	}
 	var run domain.Run
 	var page domain.CandidatePage
-	err := w.Store.Transaction(func(r *storage.Repository) error {
+	err := w.Store.TransactionContext(ctx, func(r *storage.Repository) error {
 		if err := r.Owned(claim, w.Clock()); err != nil {
 			return err
 		}
@@ -68,21 +118,24 @@ func (w *Worker) ProcessClaim(claim domain.Claim) error {
 		return err
 	})
 	if err != nil {
-		return err
+		return pageErr(err)
 	}
 	// Document/model calls happen outside database transactions. Results remain bounded
 	// by one page and are committed together only while this claim still owns its lease.
 	results := make([]*domain.Extraction, len(page.Candidates))
 	missing, proposed, existing, notFound := 0, 0, 0, 0
 	for index, c := range page.Candidates {
+		if err := renew(); err != nil {
+			return pageErr(err)
+		}
 		if !domain.Empty(c.Country) {
 			existing++
 			continue
 		}
 		missing++
-		result, err := w.Extractor.ExtractCountry(c)
+		result, err := w.Extractor.ExtractCountry(ctx, c)
 		if err != nil {
-			return err
+			return pageErr(err)
 		}
 		if result == nil {
 			notFound++
@@ -94,7 +147,10 @@ func (w *Worker) ProcessClaim(claim domain.Claim) error {
 		results[index] = result
 		proposed++
 	}
-	return w.Store.Transaction(func(r *storage.Repository) error {
+	// Join the heartbeat before committing: it must not mistake a completed job
+	// for lost ownership and cancel the transaction that completed it.
+	stopHeartbeat()
+	err = w.Store.TransactionContext(ctx, func(r *storage.Repository) error {
 		if err := r.Owned(claim, w.Clock()); err != nil {
 			return err
 		}
@@ -114,6 +170,7 @@ func (w *Worker) ProcessClaim(claim domain.Claim) error {
 		}
 		return r.Checkpoint(claim, w.Clock(), page, missing, proposed, existing, notFound)
 	})
+	return pageErr(err)
 }
 func (w *Worker) Run(ctx context.Context) {
 	timer := time.NewTicker(250 * time.Millisecond)
@@ -123,7 +180,7 @@ func (w *Worker) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if _, err := w.ProcessOne(); err != nil {
+			if _, err := w.ProcessOneContext(ctx); err != nil && ctx.Err() == nil {
 				log.Print("Queue unavailable; retrying.")
 			}
 		}

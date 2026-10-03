@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"unicode/utf8"
@@ -69,7 +70,7 @@ func (service *Review) Approve(id string, a domain.Approval) (domain.ReviewResul
 		if err = policy.ValidateEvidence(before, domain.Extraction{Value: s.Value, Confidence: s.Confidence, Evidence: s.Evidence, Reason: s.Reason}); err != nil {
 			return err
 		}
-		fresh, err := (pipeline.RuleCountryExtractor{}).ExtractCountry(before)
+		fresh, err := (pipeline.RuleCountryExtractor{}).ExtractCountry(context.Background(), before)
 		if err != nil {
 			return err
 		}

@@ -1,11 +1,13 @@
 package integration
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/khoryik96-creator/Garbage/internal/audit"
@@ -350,14 +352,32 @@ func TestRestartPauseResumeAndCancel(t *testing.T) {
 
 type extractorFunc func(domain.Candidate) (*domain.Extraction, error)
 
-func (f extractorFunc) ExtractCountry(c domain.Candidate) (*domain.Extraction, error) { return f(c) }
+func (f extractorFunc) ExtractCountry(_ context.Context, c domain.Candidate) (*domain.Extraction, error) {
+	return f(c)
+}
 func TestLeaseFencingAndExpiryRollback(t *testing.T) {
 	s, w, _ := setup(t)
 	run := newRun(t, s, "review")
 	var old, next *domain.Claim
-	must(t, s.Transaction(func(r *storage.Repository) error { var err error; old, err = r.Claim(100, 60); return err }))
-	must(t, s.Transaction(func(r *storage.Repository) error { var err error; next, err = r.Claim(161, 60); return err }))
-	w.Clock = func() float64 { return 161 }
+	must(t, s.Transaction(func(r *storage.Repository) error { var err error; old, err = r.Claim(100, 60, 5); return err }))
+	must(t, s.Transaction(func(r *storage.Repository) error {
+		c, err := r.Claim(161, 60, 5)
+		if c != nil {
+			t.Fatal("expired lease ignored retry backoff")
+		}
+		return err
+	}))
+	must(t, s.Transaction(func(r *storage.Repository) error { var err error; next, err = r.Claim(164, 60, 5); return err }))
+	must(t, s.Transaction(func(r *storage.Repository) error {
+		if err := r.Renew(*old, 164, 60); !errors.Is(err, domain.ErrLease) {
+			t.Fatal("old owner renewed another worker's lease")
+		}
+		if err := r.Release(*old); err != nil {
+			return err
+		}
+		return r.Owned(*next, 164)
+	}))
+	w.Clock = func() float64 { return 164 }
 	if err := w.ProcessClaim(*old); !errors.Is(err, domain.ErrLease) {
 		t.Fatal("old owner was not fenced")
 	}
@@ -367,11 +387,12 @@ func TestLeaseFencingAndExpiryRollback(t *testing.T) {
 	}
 	drain(t, w)
 	run2 := newRun(t, s, "review")
-	now := 300.0
-	w.Clock = func() float64 { return now }
+	var now atomic.Int64
+	now.Store(300)
+	w.Clock = func() float64 { return float64(now.Load()) }
 	w.Extractor = extractorFunc(func(c domain.Candidate) (*domain.Extraction, error) {
-		now += 70
-		return (pipeline.RuleCountryExtractor{}).ExtractCountry(c)
+		now.Add(70)
+		return (pipeline.RuleCountryExtractor{}).ExtractCountry(context.Background(), c)
 	})
 	_, err := w.ProcessOne()
 	must(t, err)
@@ -387,6 +408,10 @@ func TestLeaseFencingAndExpiryRollback(t *testing.T) {
 		return err
 	}))
 	w.Extractor = pipeline.RuleCountryExtractor{}
+	// Recovery itself schedules backoff; the next owner starts after that delay.
+	_, err = w.ProcessOne()
+	must(t, err)
+	now.Add(3)
 	drain(t, w)
 	if getRun(t, s, run2.ID).State != "completed" {
 		t.Fatal("expired job could not recover")
@@ -394,8 +419,9 @@ func TestLeaseFencingAndExpiryRollback(t *testing.T) {
 }
 func TestRetriesDoNotPersistPrivateErrors(t *testing.T) {
 	s, w, _ := setup(t)
-	now := 100.0
-	w.Clock = func() float64 { return now }
+	var now atomic.Int64
+	now.Store(100)
+	w.Clock = func() float64 { return float64(now.Load()) }
 	w.MaxAttempts = 2
 	w.Extractor = extractorFunc(func(domain.Candidate) (*domain.Extraction, error) { return nil, errors.New("private candidate data") })
 	run := newRun(t, s, "review")
@@ -404,7 +430,7 @@ func TestRetriesDoNotPersistPrivateErrors(t *testing.T) {
 	if work, err := w.ProcessOne(); work || err != nil {
 		t.Fatal("retry ignored backoff")
 	}
-	now += 3
+	now.Add(3)
 	_, err = w.ProcessOne()
 	must(t, err)
 	failed := getRun(t, s, run.ID)
@@ -464,7 +490,7 @@ func TestConcurrentClaimsAcrossConnections(t *testing.T) {
 			store = other
 		}
 		group.Go(func() {
-			err := store.Transaction(func(r *storage.Repository) error { c, e := r.Claim(100, 60); results <- c; return e })
+			err := store.Transaction(func(r *storage.Repository) error { c, e := r.Claim(100, 60, 5); results <- c; return e })
 			failures <- err
 		})
 	}
@@ -522,7 +548,7 @@ func TestExtractionDoesNotHoldDatabaseTransaction(t *testing.T) {
 	newRun(t, s, "review")
 	w.Extractor = extractorFunc(func(c domain.Candidate) (*domain.Extraction, error) {
 		must(t, s.Transaction(func(r *storage.Repository) error { _, err := r.Candidate(c.ID); return err }))
-		return (pipeline.RuleCountryExtractor{}).ExtractCountry(c)
+		return (pipeline.RuleCountryExtractor{}).ExtractCountry(context.Background(), c)
 	})
 	_, err := w.ProcessOne()
 	must(t, err)

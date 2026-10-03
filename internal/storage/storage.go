@@ -67,7 +67,10 @@ func Open(path string) (*Store, error) {
 }
 func (s *Store) Close() error { return s.DB.Close() }
 func (s *Store) Transaction(fn func(*Repository) error) error {
-	tx, err := s.DB.BeginTx(context.Background(), nil)
+	return s.TransactionContext(context.Background(), fn)
+}
+func (s *Store) TransactionContext(ctx context.Context, fn func(*Repository) error) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -282,7 +285,9 @@ func (r *Repository) ChangeRun(id, action string) (domain.Run, error) {
 	if err = changed(r.Tx.Exec("UPDATE runs SET state=?,error=NULL WHERE id=? AND state=?", state, id, run.State)); err != nil {
 		return run, err
 	}
-	if action == "resume" {
+	if action == "pause" {
+		_, err = r.Tx.Exec("UPDATE jobs SET state='queued',token=NULL,lease_until=NULL WHERE id=?", id)
+	} else if action == "resume" {
 		_, err = r.Tx.Exec("UPDATE jobs SET state='queued',token=NULL,lease_until=NULL,available_at=0,attempts=0,error=NULL WHERE id=?", id)
 	} else if action == "cancel" {
 		_, err = r.Tx.Exec("UPDATE jobs SET state='done',token=NULL,lease_until=NULL WHERE id=?", id)
@@ -382,9 +387,9 @@ func (r *Repository) Audit(action string, runID *string, candidateID *int, detai
 	_, err := r.Tx.Exec("INSERT INTO audit_events(id,run_id,candidate_id,action,details,created_at) VALUES(?,?,?,?,?,?)", domain.ID(), runID, candidateID, action, encode(details), Now())
 	return err
 }
-func (r *Repository) Audits(before float64, limit int) ([]domain.AuditEvent, error) {
+func (r *Repository) Audits(before float64, beforeID string, limit int) ([]domain.AuditEvent, error) {
 	out := []domain.AuditEvent{}
-	rows, err := r.Tx.Query("SELECT id,run_id,candidate_id,action,details,created_at FROM audit_events WHERE created_at<? ORDER BY created_at DESC,id DESC LIMIT ?", before, limit)
+	rows, err := r.Tx.Query("SELECT id,run_id,candidate_id,action,details,created_at FROM audit_events WHERE created_at<? OR (created_at=? AND id<?) ORDER BY created_at DESC,id DESC LIMIT ?", before, before, beforeID, limit)
 	if err != nil {
 		return out, err
 	}

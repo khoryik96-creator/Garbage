@@ -144,9 +144,10 @@ uv run --frozen pytest
 
 Checks cover workflow outcomes, field isolation, stale evidence, duplicate/concurrent
 approval and undo across database connections, rollback, retry privacy, restart
-recovery, lease fencing, bounded 1,010-profile processing, CSRF/forms, and untrusted
-document responses. They establish prototype behavior, not real-CV accuracy or
-throughput over the 200,000-profile JobAdder account.
+recovery, renewed and abandoned leases, active-request cancellation, bounded
+1,010-profile processing, audit pagination with tied timestamps, shared Go/Python
+text rules, CSRF/forms, and untrusted document responses. They establish prototype
+behavior, not real-CV accuracy or throughput over the 200,000-profile JobAdder account.
 
 Live integration starts with official OAuth read-only access, regional API URLs,
 pagination, throttling, and account field discovery. Verify partial-update and

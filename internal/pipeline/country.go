@@ -1,18 +1,32 @@
 package pipeline
 
 import (
+	"context"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/khoryik96-creator/Garbage/internal/domain"
 	"github.com/khoryik96-creator/Garbage/internal/policy"
 )
 
-var residence = regexp.MustCompile(`(?i)^(?:country of residence|residence country|based in)\s*:\s*(.+?)\s*$`)
+// Match Python's Unicode whitespace and splitlines semantics at the document
+// boundary. Keep the original line for evidence rather than normalizing its text.
+const whitespace = `[\p{Z}\t-\r\x{0085}\x{001c}-\x{001f}]`
+
+var residence = regexp.MustCompile(`(?i)^(?:country of res[iıİ]dence|res[iıİ]dence country|based [iıİ]n)` + whitespace + `*:` + whitespace + `*(.+?)` + whitespace + `*$`)
+var lineBreak = regexp.MustCompile(`\r\n|[\n\v\f\r\x{001c}-\x{001e}\x{0085}\x{2028}\x{2029}]`)
+
+func trimWhitespace(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || (r >= '\x1c' && r <= '\x1f') })
+}
 
 type RuleCountryExtractor struct{}
 
-func (RuleCountryExtractor) ExtractCountry(c domain.Candidate) (*domain.Extraction, error) {
+func (RuleCountryExtractor) ExtractCountry(ctx context.Context, c domain.Candidate) (*domain.Extraction, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	evidence := []domain.Evidence{}
 	values := map[string]bool{}
 	invalid := false
@@ -28,10 +42,10 @@ func (RuleCountryExtractor) ExtractCountry(c domain.Candidate) (*domain.Extracti
 	if !domain.Empty(c.AddressCountry) {
 		add("address", *c.AddressCountry, *c.AddressCountry)
 	}
-	for _, line := range strings.Split(c.Notes, "\n") {
-		match := residence.FindStringSubmatch(strings.TrimSpace(line))
+	for _, line := range lineBreak.Split(c.Notes, -1) {
+		match := residence.FindStringSubmatch(trimWhitespace(line))
 		if match != nil {
-			add("notes", line, match[1])
+			add("notes", line, trimWhitespace(match[1]))
 		}
 	}
 	if len(evidence) == 0 {

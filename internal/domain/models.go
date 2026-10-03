@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -142,5 +143,5 @@ type CandidateGateway interface {
 	ClearCountry(Candidate, string, *string) (Mutation, error)
 }
 type Extractor interface {
-	ExtractCountry(Candidate) (*Extraction, error)
+	ExtractCountry(context.Context, Candidate) (*Extraction, error)
 }

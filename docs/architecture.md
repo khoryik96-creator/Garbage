@@ -41,12 +41,20 @@ adapter needs its own policy and evaluation work before changing this behavior.
   the candidate, suggestion state, write record, and audit event together.
 - Approval and undo have one effect under concurrent submissions. Undo restores
   the exact original empty value only while Country and revision remain unchanged.
-- Claims have tokens and expiring leases. Obsolete owners cannot commit a page.
+- Claims have tokens and expiring leases. Workers renew healthy claims during and
+  between extraction requests; obsolete or expired owners cannot commit a page.
+  Pause and cancel revoke ownership, and shutdown cancels active requests and
+  releases uncommitted pages for recovery without consuming a retry.
 - Each page reads a bounded snapshot in a short transaction, extracts outside the
   transaction, then commits proposals, counters, and cursor together under the lease.
-- Retries use bounded backoff, stop after five attempts, and retain fixed error
-  messages rather than provider error text that could contain candidate information.
+- Provider failures and abandoned leases use bounded backoff, stop after five
+  attempts, and retain fixed error messages rather than provider error text that
+  could contain candidate information.
 - Runs capture their initial upper ID; later profiles belong to later runs.
+- Go and Python use shared residence-text fixtures, including Unicode whitespace
+  and line breaks, while preserving source quotes and validating every proposal.
+- Audit pagination uses timestamp and event ID together and preserves timestamp
+  precision, so events with identical timestamps remain reachable.
 
 SQLite uses WAL, foreign keys, a busy timeout, immediate transactions, and bounded
 connection pools. Independent connection tests verify claim and review contention.

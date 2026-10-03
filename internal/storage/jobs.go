@@ -8,9 +8,36 @@ import (
 	"github.com/khoryik96-creator/Garbage/internal/domain"
 )
 
-func (r *Repository) Claim(now, lease float64) (*domain.Claim, error) {
+const retryMessage = "Page processing failed; correct the adapter and resume."
+
+func (r *Repository) Claim(now, lease float64, maxAttempts int) (*domain.Claim, error) {
+	// A crashed owner consumes an attempt too. Recover a bounded batch before claiming
+	// ready work; an expired token can never be renewed or commit a checkpoint.
+	rows, err := r.Tx.Query("SELECT j.id,j.token,j.attempts FROM jobs j JOIN runs r ON r.id=j.id WHERE r.state IN ('queued','running') AND j.state='leased' AND j.lease_until<=? ORDER BY j.lease_until,j.id LIMIT 100", now)
+	if err != nil {
+		return nil, err
+	}
+	var expired []domain.Claim
+	for rows.Next() {
+		var c domain.Claim
+		if err = rows.Scan(&c.RunID, &c.Token, &c.Attempt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		expired = append(expired, c)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range expired {
+		if err = r.scheduleRetry(c, now, maxAttempts); err != nil {
+			return nil, err
+		}
+	}
 	var c domain.Claim
-	err := r.Tx.QueryRow("SELECT j.id,j.attempts FROM jobs j JOIN runs r ON r.id=j.id WHERE r.state IN ('queued','running') AND ((j.state='queued' AND j.available_at<=?) OR (j.state='leased' AND j.lease_until<=?)) ORDER BY j.available_at,j.id LIMIT 1", now, now).Scan(&c.RunID, &c.Attempt)
+	err = r.Tx.QueryRow("SELECT j.id,j.attempts FROM jobs j JOIN runs r ON r.id=j.id WHERE r.state IN ('queued','running') AND j.state='queued' AND j.available_at<=? ORDER BY j.available_at,j.id LIMIT 1", now).Scan(&c.RunID, &c.Attempt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -19,11 +46,24 @@ func (r *Repository) Claim(now, lease float64) (*domain.Claim, error) {
 	}
 	c.Token = domain.ID()
 	c.Attempt++
-	err = changed(r.Tx.Exec("UPDATE jobs SET state='leased',token=?,lease_until=?,attempts=attempts+1 WHERE id=? AND ((state='queued' AND available_at<=?) OR (state='leased' AND lease_until<=?))", c.Token, now+lease, c.RunID, now, now))
+	err = changed(r.Tx.Exec("UPDATE jobs SET state='leased',token=?,lease_until=?,attempts=attempts+1 WHERE id=? AND state='queued' AND available_at<=?", c.Token, now+lease, c.RunID, now))
 	if err != nil {
 		return nil, err
 	}
 	return &c, nil
+}
+func (r *Repository) Renew(c domain.Claim, now, lease float64) error {
+	result, err := r.Tx.Exec("UPDATE jobs SET lease_until=? WHERE id=? AND token=? AND state='leased' AND lease_until>? AND EXISTS (SELECT 1 FROM runs WHERE id=? AND state IN ('queued','running'))", now+lease, c.RunID, c.Token, now, c.RunID)
+	if err = changed(result, err); errors.Is(err, domain.ErrConflict) {
+		return domain.ErrLease
+	}
+	return err
+}
+func (r *Repository) Release(c domain.Claim) error {
+	// Shutdown is an interruption, not a provider failure. Only this token can be
+	// released, so an old worker cannot reset another worker's attempts or progress.
+	_, err := r.Tx.Exec("UPDATE jobs SET state='queued',token=NULL,lease_until=NULL,available_at=0,attempts=MAX(0,attempts-1) WHERE id=? AND token=? AND state='leased' AND EXISTS (SELECT 1 FROM runs WHERE id=? AND state IN ('queued','running'))", c.RunID, c.Token, c.RunID)
+	return err
 }
 func (r *Repository) Owned(c domain.Claim, now float64) error {
 	var n int
@@ -63,20 +103,22 @@ func (r *Repository) Retry(c domain.Claim, now float64, maxAttempts int) error {
 	if err := r.Owned(c, now); err != nil {
 		return err
 	}
+	return r.scheduleRetry(c, now, maxAttempts)
+}
+func (r *Repository) scheduleRetry(c domain.Claim, now float64, maxAttempts int) error {
 	state := "queued"
-	message := "Page processing failed; correct the adapter and resume."
 	if c.Attempt >= maxAttempts {
 		state = "failed"
 	}
 	delay := math.Min(60, math.Pow(2, float64(min(c.Attempt, 6))))
-	if err := changed(r.Tx.Exec("UPDATE jobs SET state=?,token=NULL,lease_until=NULL,available_at=?,error=? WHERE id=? AND token=? AND lease_until>?", state, now+delay, message, c.RunID, c.Token, now)); err != nil {
+	if err := changed(r.Tx.Exec("UPDATE jobs SET state=?,token=NULL,lease_until=NULL,available_at=?,error=? WHERE id=? AND token=? AND state='leased'", state, now+delay, retryMessage, c.RunID, c.Token)); err != nil {
 		return err
 	}
 	if state == "failed" {
-		if _, err := r.Tx.Exec("UPDATE runs SET state='failed',error=? WHERE id=?", message, c.RunID); err != nil {
+		if _, err := r.Tx.Exec("UPDATE runs SET state='failed',error=? WHERE id=?", retryMessage, c.RunID); err != nil {
 			return err
 		}
-		return r.Audit("run_failed", &c.RunID, nil, map[string]any{"error": message})
+		return r.Audit("run_failed", &c.RunID, nil, map[string]any{"error": retryMessage})
 	}
 	return nil
 }

@@ -8,6 +8,8 @@ from garbage_document_worker.app import app
 from garbage_document_worker.contracts import ExtractRequest, ExtractResponse
 
 client = TestClient(app)
+ROOT = Path(__file__).resolve().parents[3]
+RESIDENCE_CASES = json.loads((ROOT / "contracts/residence-text-cases.json").read_text())
 
 
 def payload(text: str) -> dict[str, object]:
@@ -18,6 +20,22 @@ def payload(text: str) -> dict[str, object]:
         "text": text,
         "fields": ["country"],
     }
+
+
+@pytest.mark.parametrize("case", RESIDENCE_CASES, ids=lambda case: case["name"])
+def test_shared_residence_text_contract(case: dict[str, object]) -> None:
+    response = client.post("/v1/extract", json=payload(str(case["text"])))
+    assert response.status_code == 200
+    result = response.json()
+    if not case["quotes"]:
+        assert result["status"] == "not_found" and result["extraction"] is None
+        return
+    assert result["status"] == "proposed"
+    assert result["extraction"]["value"] == case["value"]
+    assert result["extraction"]["confidence"] == ("high" if case["value"] else "low")
+    assert result["extraction"]["evidence"] == [
+        {"source": "notes", "quote": quote} for quote in case["quotes"]
+    ]
 
 
 @pytest.mark.parametrize("value,code", [("Malaysia", "MY"), ("UK", "GB"), ("NZ", "NZ")])

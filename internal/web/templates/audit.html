@@ -27,4 +27,4 @@
 <h3>No events yet.</h3>
 </div>{{end}}
 </section>{{if .NextBefore}}
-<a class="button secondary" href="/audit?before={{.NextBefore}}">Older events →</a>{{end}}{{template "bottom" .}}{{end}}
+<a class="button secondary" href="/audit?before={{.NextBefore}}&before_id={{.NextBeforeID}}">Older events →</a>{{end}}{{template "bottom" .}}{{end}}

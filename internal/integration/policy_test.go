@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"testing"
 
 	"github.com/khoryik96-creator/Garbage/internal/connectors"
@@ -22,7 +23,7 @@ func TestResidenceRules(t *testing.T) {
 			if test.address != "" {
 				c.AddressCountry = &test.address
 			}
-			result, err := (pipeline.RuleCountryExtractor{}).ExtractCountry(c)
+			result, err := (pipeline.RuleCountryExtractor{}).ExtractCountry(context.Background(), c)
 			must(t, err)
 			if (result != nil) != test.proposal {
 				t.Fatal("incorrect proposal presence")

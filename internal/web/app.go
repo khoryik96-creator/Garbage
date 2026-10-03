@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
@@ -596,7 +596,19 @@ func (a *App) profiles(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) auditPage(w http.ResponseWriter, r *http.Request) {
 	before := math.MaxFloat64
-	if raw := r.URL.Query().Get("before"); raw != "" {
+	query := r.URL.Query()
+	beforeID := query.Get("before_id")
+	if len(query["before"]) > 1 || len(query["before_id"]) > 1 || (query.Has("before_id") && (!query.Has("before") || len(beforeID) != 32)) {
+		a.fail(w, r, domain.Invalid("Invalid audit cursor."), 0)
+		return
+	}
+	if beforeID != "" {
+		if _, err := hex.DecodeString(beforeID); err != nil || beforeID != strings.ToLower(beforeID) {
+			a.fail(w, r, domain.Invalid("Invalid audit cursor."), 0)
+			return
+		}
+	}
+	if raw := query.Get("before"); query.Has("before") {
 		value, err := strconv.ParseFloat(raw, 64)
 		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
 			a.fail(w, r, domain.Invalid("Invalid audit cursor."), 0)
@@ -605,15 +617,20 @@ func (a *App) auditPage(w http.ResponseWriter, r *http.Request) {
 		before = value
 	}
 	var events []domain.AuditEvent
-	err := a.Store.Transaction(func(repo *storage.Repository) error { var e error; events, e = repo.Audits(before, 51); return e })
+	err := a.Store.Transaction(func(repo *storage.Repository) error {
+		var e error
+		events, e = repo.Audits(before, beforeID, 51)
+		return e
+	})
 	if err != nil {
 		a.fail(w, r, err, 0)
 		return
 	}
-	next := ""
+	next, nextID := "", ""
 	if len(events) > 50 {
-		next = fmt.Sprintf("%.9f", events[49].CreatedAt)
+		next = strconv.FormatFloat(events[49].CreatedAt, 'g', -1, 64)
+		nextID = events[49].ID
 		events = events[:50]
 	}
-	a.render(w, r, "audit", map[string]any{"Events": events, "NextBefore": next}, 200)
+	a.render(w, r, "audit", map[string]any{"Events": events, "NextBefore": next, "NextBeforeID": nextID}, 200)
 }
