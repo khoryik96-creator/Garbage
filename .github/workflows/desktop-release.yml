@@ -102,7 +102,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.platform }}
-          path: dist/Garbage-Truck-*
+          path: dist/Garbage-Truck-[0-9]*
           if-no-files-found: error
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -130,4 +130,4 @@ jobs:
 
           The interface opens in your browser. Quit from the app menu; reopening keeps your workspace. This prerelease uses demo profiles and includes Country preview, review, approval, audit, and guarded undo. JobAdder OAuth and AI document processing are not enabled. The installers are unsigned, so Windows/macOS may display a publisher warning. Native host and installer checks run before publishing. SHA-256 files accompany every download.
           EOF
-          gh release create "$GITHUB_REF_NAME" release/* --verify-tag --prerelease --title "Garbage Truck ${GITHUB_REF_NAME} · Desktop preview" --notes-file notes.md
+          gh release create "$GITHUB_REF_NAME" release/Garbage-Truck-[0-9]* --verify-tag --prerelease --title "Garbage Truck ${GITHUB_REF_NAME} · Desktop preview" --notes-file notes.md
