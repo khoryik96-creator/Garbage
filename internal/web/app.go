@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/khoryik96-creator/Garbage/internal/audit"
@@ -113,8 +114,9 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 	mux.HandleFunc("POST /workspace/backup", a.backupWorkspace)
 	mux.HandleFunc("POST /workspace/restore", a.restoreWorkspace)
 	if options.DesktopInstance != "" && options.Shutdown != nil {
+		var stopping atomic.Bool
 		mux.HandleFunc("GET /api/desktop/instance", func(w http.ResponseWriter, r *http.Request) {
-			if options.DesktopReady != nil && !options.DesktopReady() {
+			if stopping.Load() || (options.DesktopReady != nil && !options.DesktopReady()) {
 				jsonResponse(w, 503, map[string]string{"status": "saving"})
 				return
 			}
@@ -125,6 +127,7 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 				a.fail(w, r, err, 0)
 				return
 			}
+			stopping.Store(true)
 			nonce := domain.ID()
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+nonce+"'; frame-ancestors 'none'; base-uri 'none'")
 			a.render(w, r, "closed", map[string]any{"ClosedNonce": nonce}, 200)

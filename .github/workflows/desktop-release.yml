@@ -80,9 +80,9 @@ jobs:
           go build -trimpath -tags "$tags" -ldflags "$flags" -o "$binary" ./cmd/garbage-truck-desktop
           python scripts/smoke-desktop.py --binary "$binary"
           python scripts/crash-recovery.py --binary "$binary"
-          signing=()
-          if [ "$PACKAGE_PLATFORM" = windows ] && [ -n "${GARBAGE_SIGNING_PFX_PATH:-}" ]; then signing=(--sign-windows); fi
-          python scripts/package-desktop.py --platform "$PACKAGE_PLATFORM" --arch "$(go env GOARCH)" --binary "$binary" --version "$version" "${signing[@]}"
+          set --
+          if [ "$PACKAGE_PLATFORM" = windows ] && [ -n "${GARBAGE_SIGNING_PFX_PATH:-}" ]; then set -- --sign-windows; fi
+          python scripts/package-desktop.py --platform "$PACKAGE_PLATFORM" --arch "$(go env GOARCH)" --binary "$binary" --version "$version" "$@"
           } 2>&1 | tee "$RUNNER_TEMP/garbage-desktop-build.log"
       - name: Report native build failure
         if: failure()
