@@ -12,11 +12,21 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go mod download
+      - run: sudo apt-get update && sudo apt-get install -y libglib2.0-bin
       - run: test -z "$(gofmt -l cmd internal)"
       - run: go vet ./...
       - run: go test -race -timeout 90s ./...
-      - run: go build ./cmd/garbage-truck ./cmd/garbage-worker ./cmd/garbage-truck-desktop
+      - run: go build ./cmd/garbage-truck ./cmd/garbage-worker ./cmd/garbage-truck-desktop ./cmd/garbage-jobadder-check
       - run: python3 -m unittest discover -s scripts/tests -v
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run --frozen playwright install --with-deps chromium
+      - run: go build -o bin/garbage-truck-desktop ./cmd/garbage-truck-desktop
+      - run: uv run --frozen python scripts/browser-regressions.py --binary bin/garbage-truck-desktop
+      - run: python3 scripts/crash-recovery.py --binary bin/garbage-truck-desktop
   python:
     runs-on: ubuntu-latest
     steps:

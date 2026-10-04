@@ -1,14 +1,18 @@
 package desktop
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +21,147 @@ import (
 	"github.com/khoryik96-creator/Garbage/internal/domain"
 	"github.com/khoryik96-creator/Garbage/internal/storage"
 )
+
+func TestRelaunchWhileRequestDrainsKeepsHistory(t *testing.T) {
+	t.Setenv("AUTOCODER_DOCUMENT_WORKER_URL", "")
+	directory := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	firstCtx, stopFirst := context.WithCancel(ctx)
+	defer stopFirst()
+	opened := make(chan string, 2)
+	open := func(url string) error { opened <- url; return nil }
+	first := make(chan error, 1)
+	go func() { first <- Run(firstCtx, Options{DataDirectory: directory, OpenBrowser: open}) }()
+	var base string
+	select {
+	case base = <-opened:
+	case <-ctx.Done():
+		t.Fatal("startup timed out")
+	}
+	response, err := http.Get(base + "settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	csrf := response.Cookies()[0].Value
+	u, _ := url.Parse(base)
+	connection, err := net.DialTimeout("tcp", u.Host, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(8 * time.Second))
+	body := `{"mode":"review","fields":["country"]}`
+	_, err = fmt.Fprintf(connection, "POST /api/runs HTTP/1.1\r\nHost: %s\r\nCookie: gt_csrf=%s\r\nX-CSRF-Token: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", u.Host, csrf, csrf, len(body), body[:1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Leave the authenticated request body pending while shutdown drains it.
+	time.Sleep(100 * time.Millisecond)
+	stopFirst()
+	second := make(chan error, 1)
+	go func() { second <- Run(ctx, Options{DataDirectory: directory, OpenBrowser: open}) }()
+	select {
+	case <-first:
+		t.Fatal("shutdown did not wait for the pending HTTP request")
+	case <-opened:
+		t.Fatal("relaunch reopened an instance that is saving")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err = os.Stat(filepath.Join(directory, "instance.json")); err != nil {
+		t.Fatal("metadata removed before shutdown completed", err)
+	}
+	_, err = io.WriteString(connection, body[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err = http.ReadResponse(bufio.NewReader(connection), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved domain.Run
+	err = json.NewDecoder(response.Body).Decode(&saved)
+	response.Body.Close()
+	if err != nil || response.StatusCode != 202 {
+		t.Fatal("pending request was lost", err)
+	}
+	select {
+	case err = <-first:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("first instance did not stop")
+	}
+	select {
+	case base = <-opened:
+	case <-ctx.Done():
+		t.Fatal("relaunch did not acquire the released lock")
+	}
+	response, err = http.Get(base + "api/runs/" + saved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var history domain.Run
+	err = json.NewDecoder(response.Body).Decode(&history)
+	response.Body.Close()
+	if err != nil || history.ID != saved.ID {
+		t.Fatal("relaunch lost saved history", err)
+	}
+	cancel()
+	select {
+	case err = <-second:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement did not stop")
+	}
+}
+
+func TestBrowserHelperProcess(t *testing.T) {
+	if os.Getenv("GT_BROWSER_HELPER") == "" {
+		return
+	}
+	if os.Getenv("GT_BROWSER_HELPER") == "fail" {
+		os.Exit(7)
+	}
+	if os.Getenv("GT_BROWSER_HELPER") == "wait" {
+		time.Sleep(time.Minute)
+	}
+	os.Exit(0)
+}
+
+func TestBrowserExitFailuresAreObservedWithoutBlocking(t *testing.T) {
+	for _, mode := range []string{"fail", "wait"} {
+		t.Run(mode, func(t *testing.T) {
+			process := exec.Command(os.Args[0], "-test.run=TestBrowserHelperProcess")
+			process.Env = append(os.Environ(), "GT_BROWSER_HELPER="+mode)
+			reported := make(chan string, 1)
+			start := time.Now()
+			err := startBrowser(process, "http://127.0.0.1:8000/", func(url string) { reported <- url })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if time.Since(start) > time.Second {
+				t.Fatal("opener blocked startup")
+			}
+			if mode == "wait" {
+				_ = process.Process.Kill()
+			}
+			select {
+			case url := <-reported:
+				if url != "http://127.0.0.1:8000/" {
+					t.Fatal("manual URL lost")
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("asynchronous browser failure hidden")
+			}
+		})
+	}
+}
 
 func TestLaunchReopenQuitAndRestartKeepsWorkspace(t *testing.T) {
 	t.Setenv("AUTOCODER_DOCUMENT_WORKER_URL", "")

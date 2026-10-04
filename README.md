@@ -12,6 +12,11 @@ and LLM providers remain integration work; no credentials or paid model calls ar
 
 Download a package from [Desktop preview 0.3.0](https://github.com/khoryik96-creator/Garbage/releases/tag/v0.3.0).
 
+The 0.4.0 fixes are built by [Desktop installers](https://github.com/khoryik96-creator/Garbage/actions/workflows/desktop-release.yml).
+Download the `desktop-windows` artifact for the reviewed 0.4.0 source revision to
+use the new Setup.exe. The existing 0.3.0 tag is preserved. See
+[0.4.0 changes and validation](docs/reliability-0.4.0.md) for the checks and limits.
+
 - **Windows 10/11, x64:** run `Garbage-Truck-0.3.0-windows-amd64-Setup.exe`, click
   Install, then open **Garbage Truck** from the Start menu or desktop shortcut.
 - **macOS:** extract the ZIP for your processor, drag **Garbage Truck.app** to
@@ -24,8 +29,10 @@ automatically, and reopens the same workspace when you launch it again. Use
 **Quit Garbage Truck** in the sidebar to stop the app. Upgrading and uninstalling
 keep your saved data.
 
-These prototype packages are unsigned; Windows and macOS may ask you to allow
-the app. JobAdder and AI connections remain future integration work. See
+Windows builds support optional Authenticode signing; the package's Signing.json
+reports the actual signature presence and Windows verification. Workspace settings
+also checks the installed executable with Windows. macOS builds are not notarized.
+Interactive JobAdder and AI connections remain integration work. See
 [installation and backups](docs/installation.md) for details and the portable option.
 
 ## Run from source
@@ -105,6 +112,21 @@ bounded retries; document calls happen outside database transactions.
 Country is the only enabled run field. `Unknown`, `N/A`, `TBC`, and `-` are preserved.
 Nationality, phone origin, employment history, and city guesses are not residence
 evidence. Pause, resume, and cancel retain committed progress.
+
+Workspace settings provides **Download backup** and **Restore backup**. Backups
+are consistent SQLite snapshots, including committed WAL pages. Restore validates
+the database and keeps a `before-restore-*.db` recovery copy. Processing runs in a
+restored backup are paused until you resume them. Failed restores keep or recover
+the previous workspace. Uploaded backups are limited to 512 MiB.
+
+After a crash, the installed app fences abandoned worker claims and resumes from
+the last committed page with bounded retries. Run pages show processing, retry,
+failure, and review status, and completed previews offer **Start a Review run**.
+
+The standalone `cmd/garbage-jobadder-check` performs one bounded, read-only public
+API request when a securely configured access token is available. See
+[Kano and live prerequisites](docs/kano-reference.md). It does not import profiles,
+enable live runs, or write to JobAdder.
 
 ## Modules and contract
 

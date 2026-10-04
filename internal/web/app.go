@@ -41,6 +41,8 @@ type Options struct {
 	DatabasePath    string
 	DocumentWorker  bool
 	DesktopInstance string
+	DesktopReady    func() bool
+	SigningStatus   string
 	Shutdown        func()
 }
 
@@ -108,8 +110,14 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 	mux.HandleFunc("GET /audit", a.auditPage)
 	mux.HandleFunc("GET /runs", a.runsPage)
 	mux.HandleFunc("GET /settings", a.settingsPage)
+	mux.HandleFunc("POST /workspace/backup", a.backupWorkspace)
+	mux.HandleFunc("POST /workspace/restore", a.restoreWorkspace)
 	if options.DesktopInstance != "" && options.Shutdown != nil {
 		mux.HandleFunc("GET /api/desktop/instance", func(w http.ResponseWriter, r *http.Request) {
+			if options.DesktopReady != nil && !options.DesktopReady() {
+				jsonResponse(w, 503, map[string]string{"status": "saving"})
+				return
+			}
 			jsonResponse(w, 200, map[string]string{"instance_id": options.DesktopInstance})
 		})
 		mux.HandleFunc("POST /desktop/quit", func(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +153,11 @@ func (a *App) secure(next http.Handler) http.Handler {
 			http.Error(w, "Unrecognized Host.", 400)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		limit := int64(1 << 20)
+		if r.URL.Path == "/workspace/restore" {
+			limit = maxRestoreBytes + (1 << 20)
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		cookie, err := r.Cookie("gt_csrf")
 		token := ""
 		if err == nil {
@@ -156,6 +168,10 @@ func (a *App) secure(next http.Handler) http.Handler {
 		}
 		http.SetCookie(w, &http.Cookie{Name: "gt_csrf", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil})
 		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
+			if err != nil || len(cookie.Value) != 32 {
+				a.fail(w, r, domain.Invalid("Refresh the page before submitting changes."), 403)
+				return
+			}
 			scheme := "http"
 			if r.TLS != nil {
 				scheme = "https"
@@ -165,8 +181,16 @@ func (a *App) secure(next http.Handler) http.Handler {
 				return
 			}
 			supplied := r.Header.Get("X-CSRF-Token")
-			if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
-				if err := r.ParseForm(); err != nil {
+			contentType := r.Header.Get("Content-Type")
+			if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") || strings.HasPrefix(contentType, "multipart/form-data") {
+				parseErr := r.ParseForm()
+				if strings.HasPrefix(contentType, "multipart/form-data") {
+					parseErr = r.ParseMultipartForm(1 << 20)
+					if r.MultipartForm != nil {
+						defer r.MultipartForm.RemoveAll()
+					}
+				}
+				if parseErr != nil {
 					a.fail(w, r, domain.Invalid("Invalid form."), 422)
 					return
 				}
@@ -271,6 +295,7 @@ func (a *App) render(w http.ResponseWriter, r *http.Request, name string, data m
 	data["Countries"] = policy.Countries
 	data["Desktop"] = a.Options.DesktopInstance != "" && a.Options.Shutdown != nil
 	data["Version"] = a.Options.Version
+	data["SigningStatus"] = a.Options.SigningStatus
 	titles := map[string]string{"dashboard": "Overview", "runs": "Run history", "run": "Country review", "profiles": "Profiles", "audit": "Audit trail", "settings": "Workspace settings", "docs": "API reference", "closed": "App closed", "error": "Something needs attention"}
 	data["PageTitle"] = titles[name]
 	var output bytes.Buffer
@@ -608,7 +633,7 @@ func (a *App) settingsPage(w http.ResponseWriter, r *http.Request) {
 		}
 		directory = filepath.Dir(path)
 	}
-	a.render(w, r, "settings", map[string]any{"Counts": counts, "DataDirectory": directory, "DocumentWorker": a.Options.DocumentWorker, "EmbeddedWorker": a.EmbeddedWorker}, 200)
+	a.render(w, r, "settings", map[string]any{"Counts": counts, "DataDirectory": directory, "DocumentWorker": a.Options.DocumentWorker, "EmbeddedWorker": a.EmbeddedWorker, "Restored": r.URL.Query().Get("restored") == "1"}, 200)
 }
 
 func (a *App) runPage(w http.ResponseWriter, r *http.Request) {
@@ -628,6 +653,21 @@ func (a *App) runPage(w http.ResponseWriter, r *http.Request) {
 			items = items[:50]
 		}
 		writes, e := repo.Writes(run.ID)
+		if e != nil {
+			return e
+		}
+		job, e := repo.JobStatus(run.ID)
+		if e != nil {
+			return e
+		}
+		var pending, applied int
+		if e = repo.Tx.QueryRow("SELECT COUNT(*) FROM suggestions WHERE run_id=? AND state='pending'", run.ID).Scan(&pending); e != nil {
+			return e
+		}
+		if e = repo.Tx.QueryRow("SELECT COUNT(*) FROM writebacks WHERE run_id=? AND state='applied'", run.ID).Scan(&applied); e != nil {
+			return e
+		}
+		data["Job"], data["Pending"], data["Applied"] = job, pending, applied
 		data["Run"], data["Suggestions"], data["NextCursor"], data["Writes"] = run, items, next, writes
 		return e
 	})

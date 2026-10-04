@@ -89,3 +89,41 @@ The main source files are `modules/kano_cv_fields.js`, `modules/kano_cv_fill.js`
 `modules/kano_salary_write.js`, and `modules/kano_jobadder_api.js`. The integration
 sequence remains [the architecture plan](architecture.md): public read-only access,
 verified mappings, then tested write and concurrency guarantees.
+
+## 0.4.0 inspection and independent implementation
+
+The current Kano checkout was fetched again and is still commit
+`58c857dad907cf73c0e3281ba449e142ce81b9c9`. Inspection confirmed public candidate
+lookup, token refresh, PascalCase search filters, regional API responses,
+`employment.current/history`, browser `address.country/countryCode`, the account's
+custom-field shapes, and whole-record SPA writes. Its browser credentials are
+stored through KanoCrypto in browser storage; they are not server configuration.
+No credential values or candidate records were transferred.
+
+`internal/connectors/jobadder` now implements public read-only candidate pages,
+regional HTTPS host validation, same-origin pagination, redirect rejection,
+bounded `429` retries, authorization URLs with PKCE, callback/state validation,
+authorization-code exchange, and refresh requests. Fake transports test these
+contracts without live credentials. Raw public records remain separate from the
+demo domain and the observed browser schemas. Public-v2 field mappings are still
+unverified; no account is connected through the interface and no remote writes
+are implemented.
+
+The bounded diagnostic command can be built with:
+
+```sh
+bash scripts/go.sh build -o bin/garbage-jobadder-check ./cmd/garbage-jobadder-check
+bin/garbage-jobadder-check
+```
+
+It reads `GARBAGE_JOBADDER_ACCESS_TOKEN` and optionally
+`GARBAGE_JOBADDER_API_BASE` from secure runtime configuration, prints counts only,
+and neither persists records nor changes candidates. No token values are logged.
+
+This environment has no configured JobAdder or signing credentials. Enabling a
+live connection needs a registered OAuth client ID and secret, the registered
+redirect URI, user authorization with read scopes, the returned regional API
+base, and a secure token store in the desktop host. Field/picklist discovery and
+a test account or dummy candidates are needed before verifying any write
+contract, concurrency behavior, and preservation of unselected fields. A signing
+certificate and timestamp access are separate Windows distribution prerequisites.

@@ -17,7 +17,7 @@ import (
 	"github.com/khoryik96-creator/Garbage/internal/web"
 )
 
-var Version = "0.3.0"
+var Version = "0.4.0"
 
 type App struct {
 	Store          *storage.Store
@@ -34,6 +34,11 @@ func Open(settings config.Settings, options web.Options) (*App, error) {
 	closeOnError := func(err error) (*App, error) { store.Close(); return nil, err }
 	if err = store.Transaction(connectors.Seed); err != nil {
 		return closeOnError(err)
+	}
+	if settings.RecoverExclusive {
+		if err = store.Transaction(func(r *storage.Repository) error { return r.RecoverExclusive(storage.Now(), 5) }); err != nil {
+			return closeOnError(err)
+		}
 	}
 	options.Version = Version
 	options.DatabasePath = settings.DatabasePath

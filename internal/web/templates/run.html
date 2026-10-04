@@ -24,7 +24,8 @@
 </div>
 <progress value="{{.Run.Processed}}" max="{{maximum .Run.Total}}" aria-label="Profiles scanned">
 </progress>{{if .Run.Error}}
-<p class="warning">{{.Run.Error}} You can resume after correcting the cause.</p>{{end}}
+<p class="warning" role="status">{{.Run.Error}}</p>{{end}}
+<p class="hint" role="status">{{if eq .Run.State "running"}}Processing profiles. Progress is saved after each page; you can pause safely.{{else if eq .Run.State "queued"}}{{if .Job.Error}}Retry {{.Job.Attempts}} of 5. The next attempt starts after {{timestamp .Job.AvailableAt}}. Completed pages will be kept.{{else}}Waiting to process. This page updates automatically.{{end}}{{else if eq .Run.State "paused"}}Processing is paused. Choose Resume to continue from the last saved page.{{else if eq .Run.State "failed"}}Processing stopped after repeated failures. Check the document service or app log, then choose Resume to retry from the saved page.{{else if eq .Run.State "cancelled"}}This run was cancelled. Start a new run to scan again.{{else if eq .Run.Mode "preview"}}Preview complete. No profiles changed. Start a Review run to approve proposed values.{{else}}{{.Pending}} proposals still need review. {{.Applied}} approved changes can be undone below.{{end}}</p>
 <div class="run-metrics">
 <div>
 <strong>{{.Run.Missing}}
@@ -50,12 +51,12 @@
 </section>
 {{if eq .Run.Mode "preview"}}
 <div class="notice">
-<strong>Preview is read-only.</strong> These proposals cannot change a profile. Start a Review run when you want to approve changes.</div>{{else if ne .Run.State "completed"}}
+<strong>Preview is read-only.</strong> These proposals cannot change a profile.{{if eq .Run.State "completed"}}<form method="post" action="/runs"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="mode" value="review"><input type="hidden" name="fields" value="country"><button class="button primary small">Start a Review run</button></form><span class="hint">Review scans the latest profiles and checks the evidence again.</span>{{else}} Start a Review run when you want to approve changes.{{end}}</div>{{else if ne .Run.State "completed"}}
 <div class="notice">Review controls become available when this run completes.</div>{{end}}
 <div class="section-heading">
 <div>
 <p class="eyebrow">CHECK THE SOURCE</p>
-<h2>Country proposals</h2>
+<h2>Country proposals{{if eq .Run.Mode "review"}} · {{.Pending}} awaiting review{{end}}</h2>
 </div>
 <span class="muted">Showing up to 50</span>
 </div>

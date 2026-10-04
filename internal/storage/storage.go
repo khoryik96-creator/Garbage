@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -20,7 +21,12 @@ import (
 //go:embed schema.sql
 var schema string
 
-type Store struct{ DB *sql.DB }
+type Store struct {
+	DB            *sql.DB
+	Path          string
+	maintenance   sync.RWMutex
+	restoreFailed bool
+}
 type Repository struct{ Tx *sql.Tx }
 
 func Open(path string) (*Store, error) {
@@ -51,7 +57,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{DB: db}
+	s := &Store{DB: db, Path: absolute}
 	err = s.Transaction(func(r *Repository) error {
 		if _, err := r.Tx.Exec(schema); err != nil {
 			return err
@@ -76,6 +82,11 @@ func (s *Store) Transaction(fn func(*Repository) error) error {
 	return s.TransactionContext(context.Background(), fn)
 }
 func (s *Store) TransactionContext(ctx context.Context, fn func(*Repository) error) error {
+	s.maintenance.RLock()
+	defer s.maintenance.RUnlock()
+	if s.restoreFailed {
+		return domain.Invalid("Workspace recovery is required. Restart the app and restore the recovery backup.")
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err

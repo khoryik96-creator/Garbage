@@ -1,5 +1,7 @@
 name: Desktop installers
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main, chatgpt/simple-desktop-install]
     tags: ['v*']
@@ -35,12 +37,25 @@ jobs:
           'C:\msys64\mingw64\bin' | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           if (!(Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) { choco install nsis --yes --no-progress }
           'C:\Program Files (x86)\NSIS' | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Configure optional Windows signing
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          GARBAGE_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: |
+          if ($env:SIGNING_PFX_BASE64) {
+            $certificatePath = Join-Path $env:RUNNER_TEMP 'garbage-signing.pfx'
+            [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+            "GARBAGE_SIGNING_PFX_PATH=$certificatePath" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          } else { Write-Host 'No signing certificate configured: packaging an unsigned preview.' }
       - name: Verify and build native host
         shell: bash
         env:
           CGO_ENABLED: '1'
           CC: gcc
           PACKAGE_PLATFORM: ${{ matrix.platform }}
+          GARBAGE_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
         run: |
           set -o pipefail
           {
@@ -49,17 +64,25 @@ jobs:
           go vet ./...
           go test -race -timeout 90s ./...
           mkdir -p dist
-          version=0.3.0
+          version=0.4.0
           if [ "$GITHUB_REF_TYPE" = tag ]; then version="${GITHUB_REF_NAME#v}"; fi
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo 'Invalid release version'; exit 1; fi
           binary=dist/garbage-truck-desktop
           flags="-s -w -X github.com/khoryik96-creator/Garbage/internal/application.Version=$version"
           tags='sqlite_omit_load_extension'
+          if [ "$PACKAGE_PLATFORM" = macos ]; then
+            export CC=clang MACOSX_DEPLOYMENT_TARGET=13.0
+            export CGO_CFLAGS='-O2 -g -mmacosx-version-min=13.0'
+            export CGO_LDFLAGS='-mmacosx-version-min=13.0'
+          fi
           if [ "$PACKAGE_PLATFORM" = windows ]; then binary="$binary.exe"; flags="$flags -H=windowsgui -linkmode=external -extldflags=-static"; fi
           if [ "$PACKAGE_PLATFORM" = linux ]; then flags="$flags -linkmode=external -extldflags=-static"; tags="$tags,netgo,osusergo"; fi
           go build -trimpath -tags "$tags" -ldflags "$flags" -o "$binary" ./cmd/garbage-truck-desktop
           python scripts/smoke-desktop.py --binary "$binary"
-          python scripts/package-desktop.py --platform "$PACKAGE_PLATFORM" --arch "$(go env GOARCH)" --binary "$binary" --version "$version"
+          python scripts/crash-recovery.py --binary "$binary"
+          signing=()
+          if [ "$PACKAGE_PLATFORM" = windows ] && [ -n "${GARBAGE_SIGNING_PFX_PATH:-}" ]; then signing=(--sign-windows); fi
+          python scripts/package-desktop.py --platform "$PACKAGE_PLATFORM" --arch "$(go env GOARCH)" --binary "$binary" --version "$version" "${signing[@]}"
           } 2>&1 | tee "$RUNNER_TEMP/garbage-desktop-build.log"
       - name: Report native build failure
         if: failure()
@@ -82,23 +105,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $setup = (Get-ChildItem dist/*-Setup.exe).FullName
-          $result = Start-Process $setup -ArgumentList '/S' -PassThru -Wait
-          if ($result.ExitCode -ne 0) { throw 'Installer failed' }
-          $app = Join-Path $env:LOCALAPPDATA 'Programs\Garbage Truck\Garbage Truck.exe'
-          if (!(Test-Path $app)) { throw 'Installed app is missing' }
-          python scripts/smoke-desktop.py --binary $app
-          if ($LASTEXITCODE -ne 0) { throw 'Installed app smoke check failed' }
-          $data = Join-Path $env:LOCALAPPDATA 'GarbageTruck'
-          New-Item -ItemType Directory -Force $data | Out-Null
-          $marker = Join-Path $data 'preserve-check.txt'
-          Set-Content $marker 'keep my saved workspace'
-          $result = Start-Process $setup -ArgumentList '/S' -PassThru -Wait
-          if ($result.ExitCode -ne 0 -or !(Test-Path $marker)) { throw 'Upgrade did not preserve data' }
-          $uninstall = Join-Path $env:LOCALAPPDATA 'Programs\Garbage Truck\Uninstall.exe'
-          Start-Process $uninstall -ArgumentList '/S' -Wait
-          Start-Sleep -Seconds 2
-          if (!(Test-Path $marker)) { throw 'Uninstall removed saved data' }
-          if (Test-Path $app) { throw 'Uninstall did not remove the application' }
+          $previous = Join-Path $env:RUNNER_TEMP 'Garbage-Truck-0.3.0-Setup.exe'
+          Invoke-WebRequest 'https://github.com/khoryik96-creator/Garbage/releases/download/v0.3.0/Garbage-Truck-0.3.0-windows-amd64-Setup.exe' -OutFile $previous
+          ./scripts/windows-installer-check.ps1 -Setup $setup -PreviousSetup $previous
+          if ($LASTEXITCODE -ne 0) { throw 'Native installation checks failed.' }
+      - name: Remove temporary signing certificate
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:GARBAGE_SIGNING_PFX_PATH) { Remove-Item $env:GARBAGE_SIGNING_PFX_PATH -ErrorAction SilentlyContinue }
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.platform }}
@@ -122,12 +137,12 @@ jobs:
         run: |
           set -eu
           cat > notes.md <<'EOF'
-          Garbage Truck now includes an app interface and desktop launchers.
+          Garbage Truck includes desktop reliability fixes, validated backups, crash recovery, and interface improvements.
 
           Windows: download the Setup.exe installer, install, and open the Garbage Truck shortcut. No Go or Python installation is needed.
           macOS: extract the matching ZIP and drag Garbage Truck.app to Applications.
           Linux: extract the TAR.GZ and run sh install.sh, or open the included executable directly.
 
-          The interface opens in your browser. Quit from the app menu; reopening keeps your workspace. This prerelease uses demo profiles and includes Country preview, review, approval, audit, and guarded undo. JobAdder OAuth and AI document processing are not enabled. The installers are unsigned, so Windows/macOS may display a publisher warning. Native host and installer checks run before publishing. SHA-256 files accompany every download.
+          The interface opens in your browser. Quit from the app menu; reopening keeps your workspace. This prerelease uses demo profiles and includes Country preview, review, approval, audit, and guarded undo. Interactive JobAdder connection and AI document reading remain pending integration. Windows Signing.json reports signature presence and native verification for the exact files. macOS Compatibility.json reports the compiled binary and bundle's minimum versions. Native host and installer checks run before publishing. SHA-256 files accompany every download.
           EOF
           gh release create "$GITHUB_REF_NAME" release/Garbage-Truck-[0-9]* --verify-tag --prerelease --title "Garbage Truck ${GITHUB_REF_NAME} · Desktop preview" --notes-file notes.md

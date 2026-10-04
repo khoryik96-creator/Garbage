@@ -13,6 +13,7 @@ type Settings struct {
 	EmbeddedWorker    bool
 	PageSize          int
 	DocumentWorkerURL string
+	RecoverExclusive  bool // Set only by a host holding the desktop workspace lock.
 }
 
 func Load() (Settings, error) {

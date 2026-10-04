@@ -1,17 +1,56 @@
 package desktop
 
 import (
-	"os/exec"
+	"fmt"
 	"syscall"
 	"unsafe"
 )
 
-func OpenBrowser(url string) error {
-	process := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url)
-	if err := process.Start(); err != nil {
+type shellExecuteInfo struct {
+	Size, Mask                        uint32
+	Window                            uintptr
+	Verb, File, Parameters, Directory *uint16
+	Show                              int32
+	Instance                          uintptr
+	IDList                            uintptr
+	Class                             *uint16
+	ClassKey                          uintptr
+	HotKey                            uint32
+	Icon                              uintptr
+	Process                           syscall.Handle
+}
+
+func OpenBrowser(url string) error { return launchShell(url, "", browserFailure) }
+
+func launchShell(url, parameters string, report func(string)) error {
+	// ShellExecuteEx reports association errors without an OS error dialog, and
+	// returns a process handle when the handler supplies one. Browser delegation
+	// can legitimately return no handle, so it cannot always be exit-observed.
+	verb, _ := syscall.UTF16PtrFromString("open")
+	address, err := syscall.UTF16PtrFromString(url)
+	if err != nil {
 		return err
 	}
-	go func() { _ = process.Wait() }()
+	args, err := syscall.UTF16PtrFromString(parameters)
+	if err != nil {
+		return err
+	}
+	info := shellExecuteInfo{Mask: 0x440, Verb: verb, File: address, Parameters: args, Show: 1}
+	info.Size = uint32(unsafe.Sizeof(info))
+	result, _, callErr := syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteExW").Call(uintptr(unsafe.Pointer(&info)))
+	if result == 0 {
+		return fmt.Errorf("Windows could not open the default browser: %w", callErr)
+	}
+	if info.Process != 0 {
+		go func() {
+			defer syscall.CloseHandle(info.Process)
+			status, err := syscall.WaitForSingleObject(info.Process, syscall.INFINITE)
+			var code uint32
+			if err != nil || status != syscall.WAIT_OBJECT_0 || syscall.GetExitCodeProcess(info.Process, &code) != nil || code != 0 {
+				report(url)
+			}
+		}()
+	}
 	return nil
 }
 func ShowError(message string) {
