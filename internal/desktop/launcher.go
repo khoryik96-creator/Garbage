@@ -106,6 +106,7 @@ func acquireOrReopen(ctx context.Context, directory string, open func(string) er
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	manualURL := ""
 	for {
 		unlock, err := acquire(filepath.Join(directory, "app.lock"))
 		if err == nil {
@@ -117,14 +118,32 @@ func acquireOrReopen(ctx context.Context, directory string, open func(string) er
 		info, err := readInstance(filepath.Join(directory, "instance.json"))
 		if err == nil && ready(deadline, info) {
 			if open != nil {
-				if err := open(info.URL); err != nil {
-					browserFailure(info.URL)
+				req, _ := http.NewRequestWithContext(deadline, http.MethodPost, info.URL+"api/desktop/reopen", nil)
+				req.Header.Set("X-Garbage-Instance", info.ID)
+				client := &http.Client{Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+				response, requestErr := client.Do(req)
+				if requestErr != nil {
+					// The owner may exit between readiness and IPC. Retry the lock
+					// instead of abandoning a requested replacement launch.
+					manualURL = info.URL
+				} else {
+					response.Body.Close()
+					if response.StatusCode == http.StatusNoContent {
+						return nil, nil
+					}
+					if response.StatusCode != http.StatusServiceUnavailable {
+						return nil, errors.New("The browser could not be opened. Open " + info.URL + " manually. See app.log for details.")
+					}
 				}
+			} else {
+				return nil, nil
 			}
-			return nil, nil
 		}
 		select {
 		case <-deadline.Done():
+			if manualURL != "" {
+				return nil, errors.New("The interface could not be reopened. If the app is still running, open " + manualURL + " manually. See app.log for details.")
+			}
 			return nil, errors.New("Garbage Truck is still starting or saving its work. Try opening it again in a moment. See app.log in your workspace folder for details.")
 		case <-ticker.C:
 		}
@@ -158,7 +177,17 @@ func Run(parent context.Context, options Options) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	info := instance{ID: domain.ID()}
-	app, err := application.Open(settings, web.Options{DesktopInstance: info.ID, DesktopReady: func() bool { return ctx.Err() == nil }, Shutdown: cancel, SigningStatus: signingStatus()})
+	open := options.OpenBrowser
+	if open == nil {
+		open = OpenBrowser
+	}
+	app, err := application.Open(settings, web.Options{DesktopInstance: info.ID, DesktopReady: func() bool { return ctx.Err() == nil }, ReopenBrowser: func() error {
+		if err := open(info.URL); err != nil {
+			browserFailure(info.URL)
+			return err
+		}
+		return nil
+	}, Shutdown: cancel, SigningStatus: signingStatus()})
 	if err != nil {
 		return errors.New("Garbage Truck could not open its workspace. Your existing data has been kept.")
 	}

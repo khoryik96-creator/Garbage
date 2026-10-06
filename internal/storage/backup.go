@@ -157,8 +157,10 @@ func validateBackup(ctx context.Context, db *sql.DB) error {
 	}
 	checks := []string{
 		"SELECT COUNT(*) FROM demo_candidates WHERE NOT json_valid(other_fields) OR json_type(other_fields)!='object' OR version<1",
+		"SELECT COUNT(*) FROM demo_candidates,json_each(other_fields) WHERE json_each.type!='text'",
 		"SELECT COUNT(*) FROM runs WHERE NOT json_valid(fields) OR json_type(fields)!='array' OR json_array_length(fields)!=1 OR json_extract(fields,'$[0]')!='country' OR mode NOT IN ('preview','review') OR state NOT IN ('queued','running','completed','paused','failed','cancelled') OR processed<0 OR processed>total",
 		"SELECT COUNT(*) FROM suggestions WHERE NOT json_valid(evidence) OR json_type(evidence)!='array' OR field!='country' OR run_id NOT IN (SELECT id FROM runs) OR candidate_id NOT IN (SELECT id FROM demo_candidates)",
+		"SELECT COUNT(*) FROM suggestions,json_each(evidence) WHERE json_each.type!='object' OR json_type(json_each.value,'$.source') IS NOT 'text' OR json_type(json_each.value,'$.quote') IS NOT 'text'",
 		"SELECT COUNT(*) FROM writebacks WHERE suggestion_id NOT IN (SELECT id FROM suggestions) OR run_id NOT IN (SELECT id FROM runs) OR candidate_id NOT IN (SELECT id FROM demo_candidates)",
 		"SELECT COUNT(*) FROM jobs WHERE state NOT IN ('queued','leased','done','failed') OR attempts<0 OR id NOT IN (SELECT id FROM runs)",
 		"SELECT COUNT(*) FROM audit_events WHERE NOT json_valid(details) OR json_type(details)!='object'",
@@ -167,6 +169,47 @@ func validateBackup(ctx context.Context, db *sql.DB) error {
 	for _, query := range checks {
 		if err := db.QueryRowContext(ctx, query).Scan(&unsafe); err != nil || unsafe != 0 {
 			return domain.Invalid("The backup contains inconsistent saved records.")
+		}
+	}
+	// Exercise the same typed decoders as ordinary pages and services. SQLite
+	// integrity and valid JSON alone do not imply readable application records.
+	readers := []struct {
+		query string
+		read  func(scanner) error
+	}{
+		{"SELECT " + candidateColumns + " FROM demo_candidates", func(row scanner) error { _, err := scanCandidate(row); return err }},
+		{"SELECT " + runColumns + " FROM runs", func(row scanner) error { _, err := scanRun(row); return err }},
+		{"SELECT " + suggestionColumns + " FROM suggestions s JOIN demo_candidates c ON c.id=s.candidate_id", func(row scanner) error { _, err := scanSuggestion(row); return err }},
+		{"SELECT " + writeColumns + " FROM writebacks", func(row scanner) error { _, err := scanWrite(row); return err }},
+		{"SELECT id,state,attempts,available_at,lease_until,token,error FROM jobs", func(row scanner) error {
+			var id, state string
+			var attempts int
+			var available float64
+			var lease *float64
+			var token, failure *string
+			return row.Scan(&id, &state, &attempts, &available, &lease, &token, &failure)
+		}},
+		{"SELECT id,run_id,candidate_id,action,details,created_at FROM audit_events", func(row scanner) error {
+			var event domain.AuditEvent
+			var details string
+			return row.Scan(&event.ID, &event.RunID, &event.CandidateID, &event.Action, &details, &event.CreatedAt)
+		}},
+	}
+	for _, reader := range readers {
+		rows, err := db.QueryContext(ctx, reader.query)
+		if err != nil {
+			return domain.Invalid("The backup contains unreadable saved records.")
+		}
+		for rows.Next() {
+			if err = reader.read(rows); err != nil {
+				rows.Close()
+				return domain.Invalid("The backup contains unreadable saved records.")
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return domain.Invalid("The backup contains unreadable saved records.")
 		}
 	}
 	return nil

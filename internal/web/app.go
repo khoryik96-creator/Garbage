@@ -43,6 +43,7 @@ type Options struct {
 	DocumentWorker  bool
 	DesktopInstance string
 	DesktopReady    func() bool
+	ReopenBrowser   func() error
 	SigningStatus   string
 	Shutdown        func()
 }
@@ -83,6 +84,7 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 		return nil, err
 	}
 	a := &App{Store: s, Review: audit.New(s), Templates: templates, EmbeddedWorker: embedded, Options: options}
+	var stopping atomic.Bool
 	mux := http.NewServeMux()
 	static, _ := fs.Sub(assets, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
@@ -114,7 +116,6 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 	mux.HandleFunc("POST /workspace/backup", a.backupWorkspace)
 	mux.HandleFunc("POST /workspace/restore", a.restoreWorkspace)
 	if options.DesktopInstance != "" && options.Shutdown != nil {
-		var stopping atomic.Bool
 		mux.HandleFunc("GET /api/desktop/instance", func(w http.ResponseWriter, r *http.Request) {
 			if stopping.Load() || (options.DesktopReady != nil && !options.DesktopReady()) {
 				jsonResponse(w, 503, map[string]string{"status": "saving"})
@@ -140,7 +141,29 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 	mux.HandleFunc("POST /suggestions/{id}/approve", a.approve)
 	mux.HandleFunc("POST /suggestions/{id}/reject", a.reject)
 	mux.HandleFunc("POST /writebacks/{id}/undo", a.undo)
-	return a.secure(mux), nil
+	secured := a.secure(mux)
+	// This host-only IPC route uses a per-instance capability from the private
+	// workspace metadata, rather than a browser cookie. It cannot be invoked by
+	// a cross-origin form, and never accepts a URL from the caller.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/desktop/reopen" {
+			secured.ServeHTTP(w, r)
+			return
+		}
+		if r.Method != http.MethodPost || options.DesktopInstance == "" || options.ReopenBrowser == nil || r.Header.Get("Origin") != "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Garbage-Instance")), []byte(options.DesktopInstance)) != 1 {
+			http.Error(w, "Invalid desktop request.", http.StatusForbidden)
+			return
+		}
+		if stopping.Load() || (options.DesktopReady != nil && !options.DesktopReady()) {
+			http.Error(w, "The app is saving.", http.StatusServiceUnavailable)
+			return
+		}
+		if err := options.ReopenBrowser(); err != nil {
+			http.Error(w, "Browser unavailable; see app.log for the manual URL.", http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}), nil
 }
 func (a *App) secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

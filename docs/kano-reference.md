@@ -127,3 +127,16 @@ base, and a secure token store in the desktop host. Field/picklist discovery and
 a test account or dummy candidates are needed before verifying any write
 contract, concurrency behavior, and preservation of unselected fields. A signing
 certificate and timestamp access are separate Windows distribution prerequisites.
+
+
+### 0.4.1 review corrections
+
+PKCE remains the default. `OAuth.DisablePKCE` is an explicit compatibility mode
+for registered confidential clients, matching Kano's tested no-PKCE contract.
+It requires a client secret and an empty verifier, preserves callback/state
+binding, and never retries a used code or silently downgrades authentication.
+Live provider compatibility still requires account credentials.
+
+Candidate pagination compares resolved, normalized URLs. Rate-limit errors
+preserve the provider's complete retry delay; a delay beyond the lookup budget
+is returned without an early retry.

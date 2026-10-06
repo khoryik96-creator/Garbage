@@ -21,7 +21,7 @@ For a portable copy, extract the Windows **Portable.zip** and double-click
 **Garbage Truck.exe**. Both portable and installed copies use the same saved-work
 folder for the same Windows user. Windows 10/11 x64 is the supported target.
 
-The 0.4.0 build supports optional signing of the application, installer, and
+The 0.4.1 build supports optional signing of the application, installer, and
 uninstaller. `Signing.json` reports the exact package's signing status. Workspace
 settings verifies the running executable through Windows. Without a configured
 certificate, packages remain unsigned. Downloads include SHA-256 checksums.

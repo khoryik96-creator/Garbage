@@ -2,8 +2,10 @@ package jobadder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -100,7 +102,7 @@ func TestInvalidRecordsAndBoundedRetry(t *testing.T) {
 	if _, err := client.Candidates(ctx, ""); err == nil {
 		t.Fatal("rate-limit wait ignored cancellation")
 	}
-	if retryAfter("9223372036854775807") != time.Minute {
+	if retryAfter("9223372036854775807") != time.Duration(math.MaxInt64/int64(time.Second))*time.Second {
 		t.Fatal("retry duration overflow")
 	}
 }
@@ -156,5 +158,80 @@ func TestOAuthStatePKCEExchangeAndRefresh(t *testing.T) {
 	})}
 	if _, err := oauth.Refresh(context.Background(), "old-refresh"); err == nil {
 		t.Fatal("untrusted token API base accepted")
+	}
+}
+
+func TestRelativePaginationSelfLoopsRejected(t *testing.T) {
+	client, _ := New(DefaultBase, func(context.Context) (string, error) { return "token", nil })
+	for _, next := range []string{"?page=2", "/v2/candidates?page=2", DefaultBase + "/candidates?page=2"} {
+		client.HTTP = &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+			return response(200, `{"items":[],"totalCount":0,"links":{"next":"`+next+`"}}`), nil
+		})}
+		if _, err := client.Candidates(context.Background(), "?page=2"); err == nil {
+			t.Fatal("pagination self-loop accepted", next)
+		}
+	}
+}
+
+func TestRateLimitPreservesDelayWithoutEarlyRetry(t *testing.T) {
+	for _, header := range []string{"3600", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)} {
+		client, _ := New(DefaultBase, func(context.Context) (string, error) { return "token", nil })
+		calls := 0
+		client.HTTP = &http.Client{Timeout: time.Second, Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+			calls++
+			r := response(429, "")
+			r.Header.Set("Retry-After", header)
+			return r, nil
+		})}
+		start := time.Now()
+		_, err := client.Candidates(context.Background(), "")
+		var limit HTTPError
+		if !errors.As(err, &limit) || limit.Status != 429 || limit.RetryAfter < 59*time.Minute || calls != 1 || time.Since(start) > time.Second {
+			t.Fatalf("lost provider delay or retried early: error=%v delay=%v calls=%d", err, limit.RetryAfter, calls)
+		}
+	}
+}
+
+func TestOAuthConfidentialCompatibilityMode(t *testing.T) {
+	oauth := OAuth{ClientID: "client", ClientSecret: "secret", RedirectURI: "http://localhost/callback", DisablePKCE: true}
+	state := strings.Repeat("s", 32)
+	address, err := oauth.AuthorizationURL(state, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(address)
+	if u.Query().Has("code_challenge") || u.Query().Has("code_challenge_method") || u.Query().Get("state") != state {
+		t.Fatal("compatibility authorization contract changed")
+	}
+	if _, err = oauth.CodeFromRedirect(oauth.RedirectURI+"?state=wrong&code=code", state); err == nil {
+		t.Fatal("state protection disabled")
+	}
+	calls := 0
+	oauth.HTTP = &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if r.Form.Has("code_verifier") {
+			return response(400, ""), nil
+		}
+		if r.Form.Get("client_secret") != "secret" || r.Form.Get("code") != "fresh-code" {
+			t.Fatal("confidential authentication missing")
+		}
+		return response(200, `{"access_token":"access","expires_in":3600}`), nil
+	})}
+	if _, err = oauth.Exchange(context.Background(), "fresh-code", ""); err != nil || calls != 1 {
+		t.Fatal("reference provider rejected exchange", err, calls)
+	}
+	if _, err = oauth.AuthorizationURL(state, strings.Repeat("v", 43)); err == nil {
+		t.Fatal("ambiguous PKCE mode accepted")
+	}
+	oauth.ClientSecret = ""
+	if _, err = oauth.AuthorizationURL(state, ""); err == nil {
+		t.Fatal("public client allowed to disable PKCE")
+	}
+	oauth.DisablePKCE = false
+	if _, err = oauth.AuthorizationURL(state, ""); err == nil {
+		t.Fatal("default PKCE protection disabled")
 	}
 }

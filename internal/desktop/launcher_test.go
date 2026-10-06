@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -15,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,6 +127,10 @@ func TestRelaunchWhileRequestDrainsKeepsHistory(t *testing.T) {
 func TestBrowserHelperProcess(t *testing.T) {
 	if os.Getenv("GT_BROWSER_HELPER") == "" {
 		return
+	}
+	if os.Getenv("GT_BROWSER_HELPER") == "delayed" {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(7)
 	}
 	if os.Getenv("GT_BROWSER_HELPER") == "fail" {
 		os.Exit(7)
@@ -351,5 +358,135 @@ func TestInstanceRecordRejectsExternalOrMalformedURLs(t *testing.T) {
 				t.Fatal("untrusted URL accepted")
 			}
 		})
+	}
+}
+
+func TestReopenProcessHelper(t *testing.T) {
+	role := os.Getenv("GT_REOPEN_ROLE")
+	if role == "" {
+		return
+	}
+	directory := os.Getenv("GT_REOPEN_DIR")
+	if role == "caller" {
+		err := Run(context.Background(), Options{DataDirectory: directory, OpenBrowser: func(string) error { return errors.New("second-process opener must not be used") }})
+		if err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	file, err := os.OpenFile(filepath.Join(directory, "app.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		os.Exit(2)
+	}
+	log.SetOutput(file)
+	calls := 0
+	err = Run(context.Background(), Options{DataDirectory: directory, OpenBrowser: func(url string) error {
+		calls++
+		if calls == 1 {
+			log.Print("OWNER_READY")
+			return nil
+		}
+		process := exec.Command(os.Args[0], "-test.run=^TestBrowserHelperProcess$")
+		process.Env = append(os.Environ(), "GT_BROWSER_HELPER=delayed")
+		return startBrowser(process, url, browserFailure)
+	}})
+	if err != nil {
+		os.Exit(3)
+	}
+	os.Exit(0)
+}
+
+func TestReopeningProcessExitDoesNotLoseDelayedBrowserFailure(t *testing.T) {
+	directory := t.TempDir()
+	owner := exec.Command(os.Args[0], "-test.run=^TestReopenProcessHelper$")
+	owner.Env = append(os.Environ(), "GT_REOPEN_ROLE=owner", "GT_REOPEN_DIR="+directory, "AUTOCODER_DOCUMENT_WORKER_URL=")
+	if err := owner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.Process.Kill(); _ = owner.Wait() }()
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		data, _ := os.ReadFile(filepath.Join(directory, "app.log"))
+		if strings.Contains(string(data), "OWNER_READY") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("owner did not start", string(data))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	info, err := readInstance(filepath.Join(directory, "instance.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := exec.Command(os.Args[0], "-test.run=^TestReopenProcessHelper$")
+	caller.Env = append(os.Environ(), "GT_REOPEN_ROLE=caller", "GT_REOPEN_DIR="+directory)
+	if output, err := caller.CombinedOutput(); err != nil {
+		t.Fatal("second launcher failed", err, string(output))
+	}
+	for {
+		data, _ := os.ReadFile(filepath.Join(directory, "app.log"))
+		if strings.Contains(string(data), "Your browser could not be opened automatically. Open "+info.URL) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("delayed browser failure lost after second process exit", string(data))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Invalid capabilities and browser-origin requests must not launch a helper.
+	for _, origin := range []string{"", "http://evil.example"} {
+		req, _ := http.NewRequest("POST", info.URL+"api/desktop/reopen", nil)
+		req.Header.Set("X-Garbage-Instance", "invalid")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+			req.Header.Set("X-Garbage-Instance", info.ID)
+		}
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != 403 {
+			t.Fatal("invalid IPC request accepted")
+		}
+	}
+}
+
+func TestRelaunchWhenOwnerExitsBetweenReadinessAndReopen(t *testing.T) {
+	directory := t.TempDir()
+	unlock, err := acquire(filepath.Join(directory, "app.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var release sync.Once
+	defer release.Do(unlock)
+	id := domain.ID()
+	var server *httptest.Server
+	server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/desktop/instance" {
+			t.Errorf("unexpected request %s", r.URL.Path)
+			return
+		}
+		w.Header().Set("Connection", "close")
+		_, _ = fmt.Fprintf(w, `{"instance_id":"%s"}`, id)
+		_ = server.Listener.Close()
+		release.Do(unlock)
+	}))
+	server.Config.SetKeepAlivesEnabled(false)
+	server.Start()
+	defer server.Close()
+	data, _ := json.Marshal(instance{URL: server.URL + "/", ID: id})
+	if err := os.WriteFile(filepath.Join(directory, "instance.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	newUnlock, err := acquireOrReopen(ctx, directory, func(string) error { return nil })
+	if newUnlock != nil {
+		defer newUnlock()
+	}
+	if err != nil || newUnlock == nil {
+		t.Fatalf("relaunch failed after owner stopped: unlock=%v error=%v", newUnlock != nil, err)
 	}
 }

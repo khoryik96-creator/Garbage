@@ -64,7 +64,7 @@ jobs:
           go vet ./...
           go test -race -timeout 90s ./...
           mkdir -p dist
-          version=0.4.0
+          version=0.4.1
           if [ "$GITHUB_REF_TYPE" = tag ]; then version="${GITHUB_REF_NAME#v}"; fi
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo 'Invalid release version'; exit 1; fi
           binary=dist/garbage-truck-desktop
@@ -107,7 +107,8 @@ jobs:
           $setup = (Get-ChildItem dist/*-Setup.exe).FullName
           $previous = Join-Path $env:RUNNER_TEMP 'Garbage-Truck-0.3.0-Setup.exe'
           Invoke-WebRequest 'https://github.com/khoryik96-creator/Garbage/releases/download/v0.3.0/Garbage-Truck-0.3.0-windows-amd64-Setup.exe' -OutFile $previous
-          ./scripts/windows-installer-check.ps1 -Setup $setup -PreviousSetup $previous
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.4.1" }
+          ./scripts/windows-installer-check.ps1 -Setup $setup -PreviousSetup $previous -Version $version
           if ($LASTEXITCODE -ne 0) { throw 'Native installation checks failed.' }
       - name: Remove temporary signing certificate
         if: always() && runner.os == 'Windows'

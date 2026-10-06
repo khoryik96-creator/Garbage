@@ -21,6 +21,9 @@ const scopes = "read read_candidate offline_access"
 type OAuth struct {
 	ClientID, ClientSecret, RedirectURI string
 	HTTP                                *http.Client
+	// DisablePKCE is an explicit confidential-client compatibility mode for
+	// registered providers that reject PKCE. Never downgrade automatically.
+	DisablePKCE bool
 }
 type Token struct {
 	Access    string `json:"access_token"`
@@ -33,11 +36,22 @@ func (Token) String() string { return "JobAdder token [redacted]" }
 
 func (o OAuth) AuthorizationURL(state, verifier string) (string, error) {
 	u, err := url.Parse(o.RedirectURI)
-	if err != nil || u.User != nil || u.Fragment != "" || u.RawQuery != "" || (u.Scheme != "https" && (u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost"))) || u.Host == "" || o.ClientID == "" || len(state) < 32 || len(verifier) < 43 || len(verifier) > 128 {
+	if err != nil || u.User != nil || u.Fragment != "" || u.RawQuery != "" || (u.Scheme != "https" && (u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost"))) || u.Host == "" || o.ClientID == "" || len(state) < 32 {
 		return "", domain.Invalid("Configure the registered JobAdder redirect URI, state, and PKCE verifier.")
 	}
-	hash := sha256.Sum256([]byte(verifier))
-	q := url.Values{"response_type": {"code"}, "client_id": {o.ClientID}, "redirect_uri": {o.RedirectURI}, "scope": {scopes}, "state": {state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(hash[:])}, "code_challenge_method": {"S256"}}
+	q := url.Values{"response_type": {"code"}, "client_id": {o.ClientID}, "redirect_uri": {o.RedirectURI}, "scope": {scopes}, "state": {state}}
+	if o.DisablePKCE {
+		if o.ClientSecret == "" || verifier != "" {
+			return "", domain.Invalid("PKCE compatibility mode requires a confidential client and no verifier.")
+		}
+	} else {
+		if len(verifier) < 43 || len(verifier) > 128 || strings.Trim(verifier, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~") != "" {
+			return "", domain.Invalid("Configure a valid PKCE verifier.")
+		}
+		hash := sha256.Sum256([]byte(verifier))
+		q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(hash[:]))
+		q.Set("code_challenge_method", "S256")
+	}
 	return "https://id.jobadder.com/connect/authorize?" + q.Encode(), nil
 }
 
@@ -63,7 +77,11 @@ func (o OAuth) Exchange(ctx context.Context, code, verifier string) (Token, erro
 	if _, err := o.AuthorizationURL(domain.ID(), verifier); err != nil {
 		return Token{}, err
 	}
-	return o.token(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {o.RedirectURI}, "code_verifier": {verifier}})
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {o.RedirectURI}}
+	if !o.DisablePKCE {
+		form.Set("code_verifier", verifier)
+	}
+	return o.token(ctx, form)
 }
 func (o OAuth) Refresh(ctx context.Context, refresh string) (Token, error) {
 	if refresh == "" {

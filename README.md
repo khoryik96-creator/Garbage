@@ -12,10 +12,10 @@ and LLM providers remain integration work; no credentials or paid model calls ar
 
 Download a package from [Desktop preview 0.3.0](https://github.com/khoryik96-creator/Garbage/releases/tag/v0.3.0).
 
-The 0.4.0 fixes are built by [Desktop installers](https://github.com/khoryik96-creator/Garbage/actions/workflows/desktop-release.yml).
-Download the `desktop-windows` artifact for the reviewed 0.4.0 source revision to
+The 0.4.1 fixes are built by [Desktop installers](https://github.com/khoryik96-creator/Garbage/actions/workflows/desktop-release.yml).
+Download the `desktop-windows` artifact for the reviewed 0.4.1 source revision to
 use the new Setup.exe. The existing 0.3.0 tag is preserved. See
-[0.4.0 changes and validation](docs/reliability-0.4.0.md) for the checks and limits.
+[0.4.1 review fixes](docs/reliability-0.4.1.md) and [0.4.0 changes](docs/reliability-0.4.0.md) for the checks and limits.
 
 - **Windows 10/11, x64:** run `Garbage-Truck-0.3.0-windows-amd64-Setup.exe`, click
   Install, then open **Garbage Truck** from the Start menu or desktop shortcut.

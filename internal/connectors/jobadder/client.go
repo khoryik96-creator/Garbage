@@ -5,8 +5,10 @@ package jobadder
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -70,6 +72,12 @@ func (c *Client) pageURL(next string) (*url.URL, error) {
 	if u.Scheme != c.base.Scheme || u.Host != c.base.Host || u.User != nil || u.Fragment != "" || u.Path != c.base.Path+"/candidates" {
 		return nil, domain.Invalid("JobAdder pagination must stay on this account's candidate API.")
 	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return nil, domain.Invalid("Invalid JobAdder pagination query.")
+	}
+	u.RawQuery = query.Encode()
+	u.RawPath = ""
 	return &u, nil
 }
 
@@ -92,16 +100,24 @@ func (e HTTPError) Error() string {
 }
 
 func retryAfter(raw string) time.Duration {
-	if seconds, err := strconv.Atoi(raw); err == nil && seconds >= 0 {
-		return time.Duration(min(seconds, 60)) * time.Second
+	if seconds, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
+		return time.Duration(min(seconds, uint64(math.MaxInt64/int64(time.Second)))) * time.Second
 	}
 	if at, err := http.ParseTime(raw); err == nil {
-		return min(max(time.Until(at), 0), time.Minute)
+		return max(time.Until(at), 0)
 	}
 	return time.Second
 }
 
 func (c *Client) Candidates(ctx context.Context, next string) (Page, error) {
+	// Bound the entire lookup, including rate-limit waits, without shortening a
+	// provider's Retry-After. Return the full delay when it exceeds our budget.
+	budget := c.HTTP.Timeout
+	if budget <= 0 {
+		budget = 20 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	var page Page
 	u, err := c.pageURL(next)
 	if err != nil {
@@ -133,6 +149,9 @@ func (c *Client) Candidates(ctx context.Context, next string) (Page, error) {
 			if response.StatusCode != 429 || attempt == 2 {
 				return page, failure
 			}
+			if deadline, ok := ctx.Deadline(); ok && failure.RetryAfter >= time.Until(deadline) {
+				return page, failure
+			}
 			select {
 			case <-ctx.Done():
 				return page, ctx.Err()
@@ -157,12 +176,14 @@ func (c *Client) Candidates(ctx context.Context, next string) (Page, error) {
 			}
 		}
 		if page.Links.Next != "" {
-			if _, err = c.pageURL(page.Links.Next); err != nil {
-				return Page{}, err
+			nextURL, nextErr := c.pageURL(page.Links.Next)
+			if nextErr != nil {
+				return Page{}, nextErr
 			}
-			if page.Links.Next == u.String() {
+			if nextURL.String() == u.String() {
 				return Page{}, domain.Invalid("JobAdder pagination did not advance.")
 			}
+			page.Links.Next = nextURL.String()
 		}
 		return page, nil
 	}

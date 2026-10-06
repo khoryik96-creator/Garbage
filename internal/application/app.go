@@ -17,7 +17,7 @@ import (
 	"github.com/khoryik96-creator/Garbage/internal/web"
 )
 
-var Version = "0.4.0"
+var Version = "0.4.1"
 
 type App struct {
 	Store          *storage.Store

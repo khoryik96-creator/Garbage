@@ -198,3 +198,57 @@ func TestBackupAndMultipartRestoreRequireCSRF(t *testing.T) {
 		t.Fatal("HTTP restore lost run history")
 	}
 }
+
+func TestTypedMalformedRestoreRejectedBeforeReplacingWorkspace(t *testing.T) {
+	s, w, _ := setup(t)
+	run := completed(t, s, w, "review")
+	handler, err := web.New(s, false)
+	must(t, err)
+	b := browser{handler: handler, token: domain.ID()}
+	for _, query := range []string{
+		`UPDATE demo_candidates SET other_fields='{"department":123}' WHERE id=1001`,
+		`UPDATE demo_candidates SET other_fields='{"department":null}' WHERE id=1001`,
+		`UPDATE suggestions SET evidence='[42]'`,
+		`UPDATE suggestions SET evidence='[{"source":42,"quote":"text"}]'`,
+		`UPDATE runs SET created_at='not-a-timestamp'`,
+		`INSERT INTO audit_events VALUES('invalid-audit',NULL,'not-an-integer','test','{}',1)`,
+		`UPDATE jobs SET available_at='not-a-number'`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "invalid.db")
+			must(t, s.Backup(context.Background(), path))
+			db, err := sql.Open("sqlite3", path)
+			must(t, err)
+			_, err = db.Exec(query)
+			must(t, err)
+			must(t, db.Close())
+			body := new(bytes.Buffer)
+			form := multipart.NewWriter(body)
+			must(t, form.WriteField("_csrf", b.token))
+			file, err := form.CreateFormFile("backup", "backup.db")
+			must(t, err)
+			data, err := os.ReadFile(path)
+			must(t, err)
+			_, err = file.Write(data)
+			must(t, err)
+			must(t, form.Close())
+			request := httptest.NewRequest("POST", "http://localhost/workspace/restore", body)
+			request.Header.Set("Content-Type", form.FormDataContentType())
+			request.AddCookie(&http.Cookie{Name: "gt_csrf", Value: b.token})
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != 422 {
+				t.Fatalf("malformed backup reported success: %d %s", response.Code, response.Body.String())
+			}
+			if response := b.request("GET", "/profiles", "", false); response.Code != 200 {
+				t.Fatal("original profiles became unreadable", response.Code)
+			}
+			if response := b.request("GET", "/audit", "", false); response.Code != 200 {
+				t.Fatal("original audit became unreadable", response.Code)
+			}
+			if getRun(t, s, run.ID).Proposed != 6 {
+				t.Fatal("rejected restore changed history")
+			}
+		})
+	}
+}
