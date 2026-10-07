@@ -1,6 +1,7 @@
 """Exercise real navigation, short viewports, and workspace backup/restore."""
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -146,14 +147,33 @@ def check(binary: Path, executable: str | None, artifacts: Path | None) -> None:
                     callback = (
                         f"http://127.0.0.1:{callback_port.getsockname()[1]}/jobadder/callback"
                     )
-                page.route(
-                    "https://id.jobadder.com/**",
-                    lambda route: route.fulfill(
-                        status=200,
-                        content_type="text/html",
-                        body="<h1>JobAdder sign-in fixture</h1>",
-                    ),
+                # Chromium 153 does not apply Playwright URL routing to every
+                # redirected form request. Fetch interception covers the actual
+                # identity navigation without making an external network call.
+                identity = page.context.new_cdp_session(page)
+                identity.send(
+                    "Fetch.enable",
+                    {
+                        "patterns": [
+                            {"urlPattern": "https://id.jobadder.com/*", "requestStage": "Request"}
+                        ]
+                    },
                 )
+                intercepted: list[str] = []
+
+                def sign_in_fixture(event: dict) -> None:
+                    intercepted.append(event["request"]["url"])
+                    identity.send(
+                        "Fetch.fulfillRequest",
+                        {
+                            "requestId": event["requestId"],
+                            "responseCode": 200,
+                            "responseHeaders": [{"name": "Content-Type", "value": "text/html"}],
+                            "body": base64.b64encode(b"<h1>JobAdder sign-in fixture</h1>").decode(),
+                        },
+                    )
+
+                identity.on("Fetch.requestPaused", sign_in_fixture)
                 page.get_by_label("Client ID", exact=True).fill("test-client")
                 page.get_by_label("Client Secret", exact=True).fill("test-secret-must-never-return")
                 page.get_by_label("Registered callback URL").fill(callback)
@@ -163,7 +183,16 @@ def check(binary: Path, executable: str | None, artifacts: Path | None) -> None:
                     re.compile(r"https://id\.jobadder\.com/connect/authorize\?.*")
                 )
                 expect(page.get_by_role("heading", name="JobAdder sign-in fixture")).to_be_visible()
+                assert (
+                    sum(
+                        url.startswith("https://id.jobadder.com/connect/authorize?")
+                        for url in intercepted
+                    )
+                    == 1
+                )
                 assert "test-secret-must-never-return" not in page.url
+                identity.send("Fetch.disable")
+                identity.detach()
                 page.goto(base + "settings")
                 expect(page.get_by_label("Client Secret", exact=True)).to_have_value("")
                 page.get_by_role("button", name="Disconnect and remove saved details").click()
