@@ -122,30 +122,50 @@ func (w *Worker) ProcessClaimContext(parent context.Context, claim domain.Claim)
 	}
 	// Document/model calls happen outside database transactions. Results remain bounded
 	// by one page and are committed together only while this claim still owns its lease.
-	results := make([]*domain.Extraction, len(page.Candidates))
+	results := make([]map[string]*domain.Extraction, len(page.Candidates))
 	missing, proposed, existing, notFound := 0, 0, 0, 0
 	for index, c := range page.Candidates {
 		if err := renew(); err != nil {
 			return pageErr(err)
 		}
-		if !domain.Empty(c.Country) {
+
+		hasMissing := false
+		hasProposal := false
+		results[index] = map[string]*domain.Extraction{}
+		for _, field := range run.Fields {
+			if !domain.Empty(c.FieldValue(field)) {
+				continue
+			}
+			hasMissing = true
+			var result *domain.Extraction
+			var err error
+			if field == "country" {
+				result, err = w.Extractor.ExtractCountry(ctx, c)
+			} else {
+				result, err = pipeline.ExtractField(ctx, c, field)
+			}
+			if err != nil {
+				return pageErr(err)
+			}
+			if result == nil {
+				continue
+			}
+			if err = policy.ValidateFieldEvidence(c, field, *result); err != nil {
+				return err
+			}
+			results[index][field] = result
+			proposed++
+			hasProposal = true
+		}
+		if !hasMissing {
 			existing++
-			continue
+		} else {
+			missing++
+			if !hasProposal {
+				notFound++
+			}
 		}
-		missing++
-		result, err := w.Extractor.ExtractCountry(ctx, c)
-		if err != nil {
-			return pageErr(err)
-		}
-		if result == nil {
-			notFound++
-			continue
-		}
-		if err = policy.ValidateEvidence(c, *result); err != nil {
-			return err
-		}
-		results[index] = result
-		proposed++
+
 	}
 	// Join the heartbeat before committing: it must not mistake a completed job
 	// for lost ownership and cancel the transaction that completed it.
@@ -161,13 +181,16 @@ func (w *Worker) ProcessClaimContext(parent context.Context, claim domain.Claim)
 		if (current.State != "queued" && current.State != "running") || current.Cursor != run.Cursor {
 			return domain.ErrLease
 		}
-		for index, result := range results {
-			if result != nil {
-				if err := r.AddSuggestion(run, page.Candidates[index], *result); err != nil {
-					return err
+		for index, fields := range results {
+			for _, field := range run.Fields {
+				if result := fields[field]; result != nil {
+					if err := r.AddFieldSuggestion(run, page.Candidates[index], field, *result); err != nil {
+						return err
+					}
 				}
 			}
 		}
+
 		return r.Checkpoint(claim, w.Clock(), page, missing, proposed, existing, notFound)
 	})
 	return pageErr(err)

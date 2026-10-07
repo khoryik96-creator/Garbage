@@ -12,14 +12,23 @@ mkdir -p "$app_dir" "$data_root/applications"
 install -m 755 "$package_dir/garbage-truck-desktop" "$app_dir/garbage-truck-desktop"
 install -m 644 "$package_dir/icon.svg" "$app_dir/icon.svg"
 install -m 755 "$package_dir/uninstall.sh" "$app_dir/uninstall.sh"
-desktop_executable=$(printf '%s' "$app_dir/garbage-truck-desktop" | sed 's/\\/\\\\/g;s/"/\\"/g;s/`/\\`/g;s/\$/\\$/g;s/%/%%/g')
+cat > "$app_dir/launch.sh" <<'LAUNCH'
+#!/bin/sh
+exec "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/garbage-truck-desktop" "$@"
+LAUNCH
+chmod 755 "$app_dir/launch.sh"
+# Exec is parsed twice: desktop-entry value escapes, then command quoting.
+# Escape for command quoting first and double backslashes for value parsing.
+desktop_executable=$(printf '%s' "$app_dir/launch.sh" | sed 's/\\/\\\\/g;s/"/\\"/g;s/`/\\`/g;s/\$/\\$/g;s/%/%%/g;s/\\/\\\\/g')
+desktop_icon=$(printf '%s' "$app_dir/icon.svg" | sed 's/\\/\\\\/g')
 cat > "$data_root/applications/garbage-truck.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Garbage Truck
 Comment=Candidate coding workspace
-Exec="$desktop_executable"
-Icon=$app_dir/icon.svg
+# Keep argv[0] fixed: GIO checks it before expanding percent field codes.
+Exec=/bin/sh "$desktop_executable"
+Icon=$desktop_icon
 Terminal=false
 Categories=Office;Utility;
 StartupNotify=false

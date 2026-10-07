@@ -145,13 +145,33 @@
                   "fields": {
                     "type": "array",
                     "minItems": 1,
-                    "maxItems": 1,
+                    "maxItems": 10,
                     "items": {
-                      "const": "country"
+                      "type": "string",
+                      "enum": [
+                        "country",
+                        "email",
+                        "mobile",
+                        "phone",
+                        "linkedin_url",
+                        "current_position",
+                        "current_employer",
+                        "notice_period",
+                        "state",
+                        "work_type"
+                      ]
                     },
                     "default": [
                       "country"
-                    ]
+                    ],
+                    "uniqueItems": true
+                  },
+                  "protection": {
+                    "type": "string",
+                    "enum": [
+                      "fill_blanks"
+                    ],
+                    "default": "fill_blanks"
                   }
                 }
               }

@@ -67,8 +67,8 @@ func TestPagesCatalogueAndPagination(t *testing.T) {
 		t.Fatal("lost field mappings")
 	}
 	for _, f := range catalogue.Fields {
-		if f.PublicMappingVerified || f.EnabledForRuns && f.Key != "country" {
-			t.Fatal("scope widened")
+		if f.PublicMappingVerified {
+			t.Fatal("unverified live mapping enabled")
 		}
 	}
 	for _, path := range []string{"/api/candidates?limit=10000", "/api/candidates?after=-1", "/api/candidates?limit=0", "/audit?before=NaN"} {
@@ -88,9 +88,27 @@ func TestDeveloperHostDoesNotOfferDesktopShutdown(t *testing.T) {
 		t.Fatal("developer web host exposed desktop shutdown")
 	}
 }
+
+func TestQuitImmediatelyMarksInstanceAsSaving(t *testing.T) {
+	s, _, _ := setup(t)
+	draining := make(chan struct{})
+	defer close(draining)
+	handler, err := web.NewWithOptions(s, true, web.Options{DesktopInstance: domain.ID(), Shutdown: func() { <-draining }})
+	must(t, err)
+	b := browser{handler: handler, token: domain.ID()}
+	if b.request("GET", "/api/desktop/instance", "", false).Code != 200 {
+		t.Fatal("instance not ready")
+	}
+	if b.request("POST", "/desktop/quit", "", true).Code != 200 {
+		t.Fatal("quit failed")
+	}
+	if b.request("GET", "/api/desktop/instance", "", false).Code != 503 {
+		t.Fatal("relaunch could reopen an instance after quit was requested")
+	}
+}
 func TestStrictRequestsAndCSRF(t *testing.T) {
 	b := startBrowser(t)
-	for _, body := range []string{`{"fields":["email"]}`, `{"mode":"auto_fill"}`, `{"fields":[]}`, `{"fields":["country","country"]}`, `{"overwrite":true}`, `{"mode":null}`, `{"fields":null}`, `{"mode":"preview","mode":"review"}`, `null`, `{} {}`, `[]`} {
+	for _, body := range []string{`{"fields":["unsupported"]}`, `{"mode":"auto_fill"}`, `{"fields":[]}`, `{"fields":["country","country"]}`, `{"overwrite":true}`, `{"mode":null}`, `{"fields":null}`, `{"mode":"preview","mode":"review"}`, `null`, `{} {}`, `[]`} {
 		t.Run(body, func(t *testing.T) {
 			if r := b.request("POST", "/api/runs", body, true); r.Code != 422 {
 				t.Fatalf("invalid body accepted: %d", r.Code)

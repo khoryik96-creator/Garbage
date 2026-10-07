@@ -247,6 +247,7 @@ func (g brokenGateway) FillCountry(c domain.Candidate, value string) (domain.Mut
 }
 func TestUnexpectedFieldMutationRollsBackEverything(t *testing.T) {
 	s, w, _ := setup(t)
+	originalNotes := candidate(t, s, 1001).Notes
 	run := completed(t, s, w, "review")
 	service := audit.New(s)
 	service.Gateway = func(r *storage.Repository) domain.CandidateGateway {
@@ -256,7 +257,7 @@ func TestUnexpectedFieldMutationRollsBackEverything(t *testing.T) {
 		t.Fatal("bad adapter accepted")
 	}
 	c := candidate(t, s, 1001)
-	if c.Country != nil || c.Notes != "" {
+	if c.Country != nil || c.Notes != originalNotes {
 		t.Fatal("candidate not rolled back")
 	}
 	must(t, s.Transaction(func(r *storage.Repository) error {

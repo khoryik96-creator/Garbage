@@ -45,6 +45,12 @@ func Seed(r *storage.Repository) error {
 		{ID: 1010, Name: "Robin Lane", AddressCountry: domain.String("Atlantis")},
 	}
 	for _, c := range profiles {
+		if c.ID == 1001 {
+			c.Notes = "Mobile: +61 412 345 678\nCurrent employer: Example Analytics"
+		}
+		if c.ID == 1003 {
+			c.Notes += "\nPhone: +64 9 555 0123\nLinkedIn: https://www.linkedin.com/in/demo-sam-taylor"
+		}
 		c.Name = "Demo " + c.Name
 		c.OtherFields = map[string]string{"email": fmt.Sprintf("demo%d@example.invalid", c.ID), "title": "Demo analyst"}
 		if err := r.AddCandidate(c); err != nil {
@@ -52,4 +58,20 @@ func Seed(r *storage.Repository) error {
 		}
 	}
 	return r.Audit("demo_seeded", nil, nil, map[string]any{"profiles": len(profiles)})
+}
+
+func (d Demo) FillField(c domain.Candidate, field, value string) (domain.Mutation, error) {
+	if field == "country" {
+		return d.FillCountry(c, value)
+	}
+	return d.Repository.MutateField(c, field, &value, nil)
+}
+func (d Demo) ClearField(c domain.Candidate, field, expected string, restore *string) (domain.Mutation, error) {
+	if field == "country" {
+		return d.ClearCountry(c, expected, restore)
+	}
+	if !domain.Empty(restore) {
+		return domain.Mutation{}, domain.Invalid("Undo must restore an empty value.")
+	}
+	return d.Repository.MutateField(c, field, restore, &expected)
 }

@@ -7,116 +7,221 @@
   "observed_transport": "browser_spa",
   "fields": [
     {
-      "key": "country", "label": "Country",
-      "kano_paths": ["address.country", "address.countryCode"],
+      "key": "country",
+      "label": "Country",
+      "kano_paths": [
+        "address.country",
+        "address.countryCode"
+      ],
       "source_file": "modules/kano_cv_fill.js",
       "enabled_for_runs": true,
       "note": "Treat country name and code as one field. Either existing value blocks a missing-field fill. Enabled only on synthetic profiles today."
     },
     {
-      "key": "name", "label": "Name",
-      "kano_paths": ["firstName", "lastName"],
+      "key": "name",
+      "label": "Name",
+      "kano_paths": [
+        "firstName",
+        "lastName"
+      ],
       "source_file": "modules/kano_cv_fill.js",
-      "note": "Grouped components require their own missing-value checks. Do not inherit Kano's last-word surname splitting."
+      "note": "Grouped components require their own missing-value checks. Do not inherit Kano's last-word surname splitting.",
+      "enabled_for_runs": false
     },
     {
-      "key": "email", "label": "Email",
-      "kano_paths": ["email"], "source_file": "modules/kano_cv_fill.js",
-      "note": "Validate syntax and preserve existing addresses."
-    },
-    {
-      "key": "mobile", "label": "Mobile",
-      "kano_paths": ["mobile.normalizedNumber", "mobile.formattedNumber", "mobile.extension"],
+      "key": "email",
+      "label": "Email",
+      "kano_paths": [
+        "email"
+      ],
       "source_file": "modules/kano_cv_fill.js",
-      "note": "Mobile and phone are separate targets. Do not copy one extracted number into both by default."
+      "note": "Validate syntax and preserve existing addresses.",
+      "enabled_for_runs": true
     },
     {
-      "key": "phone", "label": "Phone",
-      "kano_paths": ["phone.normalizedNumber", "phone.formattedNumber", "phone.extension"],
+      "key": "mobile",
+      "label": "Mobile",
+      "kano_paths": [
+        "mobile.normalizedNumber",
+        "mobile.formattedNumber",
+        "mobile.extension"
+      ],
       "source_file": "modules/kano_cv_fill.js",
-      "note": "Use number-aware normalization; a calling code is not residence evidence."
+      "note": "Mobile and phone are separate targets. Do not copy one extracted number into both by default.",
+      "enabled_for_runs": true
     },
     {
-      "key": "linkedin_url", "label": "LinkedIn URL",
-      "kano_paths": ["socialLinks.linkedInUrl"], "source_file": "modules/kano_cv_fill.js",
-      "note": "Validate URL and preserve other social links."
+      "key": "phone",
+      "label": "Phone",
+      "kano_paths": [
+        "phone.normalizedNumber",
+        "phone.formattedNumber",
+        "phone.extension"
+      ],
+      "source_file": "modules/kano_cv_fill.js",
+      "note": "Use number-aware normalization; a calling code is not residence evidence.",
+      "enabled_for_runs": true
     },
     {
-      "key": "current_position", "label": "Current position",
-      "kano_paths": ["currentPosition"], "source_file": "modules/kano_cv_fill.js",
-      "note": "Check source date before coding a latest role."
+      "key": "linkedin_url",
+      "label": "LinkedIn URL",
+      "kano_paths": [
+        "socialLinks.linkedInUrl"
+      ],
+      "source_file": "modules/kano_cv_fill.js",
+      "note": "Validate URL and preserve other social links.",
+      "enabled_for_runs": true
     },
     {
-      "key": "current_employer", "label": "Current employer",
-      "kano_paths": ["currentEmployer"], "source_file": "modules/kano_cv_fill.js",
-      "note": "The public lookup also reads employment.current and employment.history; those are a different API shape."
+      "key": "current_position",
+      "label": "Current position",
+      "kano_paths": [
+        "currentPosition"
+      ],
+      "source_file": "modules/kano_cv_fill.js",
+      "note": "Check source date before coding a latest role.",
+      "enabled_for_runs": true
     },
     {
-      "key": "current_salary", "label": "Current salary",
-      "kano_paths": ["currentSalary"], "source_file": "modules/kano_salary_api.js",
-      "note": "Composite amount/range/rate block, sometimes wrapped in salary. Treat zero as a value, not as empty."
+      "key": "current_employer",
+      "label": "Current employer",
+      "kano_paths": [
+        "currentEmployer"
+      ],
+      "source_file": "modules/kano_cv_fill.js",
+      "note": "The public lookup also reads employment.current and employment.history; those are a different API shape.",
+      "enabled_for_runs": true
     },
     {
-      "key": "expected_salary", "label": "Expected salary",
-      "kano_paths": ["idealSalary"], "source_file": "modules/kano_salary_api.js",
-      "note": "Kano calls the target idealSalary. Amount, period, currency, and basis must remain distinct."
-    },
-    {
-      "key": "notice_period", "label": "Notice period / availability",
-      "kano_paths": ["availability.type", "availability.date"],
+      "key": "current_salary",
+      "label": "Current salary",
+      "kano_paths": [
+        "currentSalary"
+      ],
       "source_file": "modules/kano_salary_api.js",
-      "note": "Kano also reads availabilityType and availableDate variants. Preserve exact duration; do not silently cap long notices to six months."
+      "note": "Composite amount/range/rate block, sometimes wrapped in salary. Treat zero as a value, not as empty.",
+      "enabled_for_runs": false
     },
     {
-      "key": "industry", "label": "Industry",
-      "kano_paths": ["customFields.1.valueList", "customFields.1.value"],
-      "source_file": "modules/kano_panel_write.js", "account_specific": true,
-      "note": "Observed multi-select in Kano's account. Independent of industry sub-category; verify IDs and options for the connected account."
+      "key": "expected_salary",
+      "label": "Expected salary",
+      "kano_paths": [
+        "idealSalary"
+      ],
+      "source_file": "modules/kano_salary_api.js",
+      "note": "Kano calls the target idealSalary. Amount, period, currency, and basis must remain distinct.",
+      "enabled_for_runs": false
     },
     {
-      "key": "industry_subcategory", "label": "Industry sub-category",
-      "kano_paths": ["customFields.2.valueList", "customFields.2.value"],
-      "source_file": "modules/kano_panel_write.js", "account_specific": true,
-      "note": "Independent multi-select in Kano. Do not infer parent-child coupling."
+      "key": "notice_period",
+      "label": "Notice period / availability",
+      "kano_paths": [
+        "availability.type",
+        "availability.date"
+      ],
+      "source_file": "modules/kano_salary_api.js",
+      "note": "Kano also reads availabilityType and availableDate variants. Preserve exact duration; do not silently cap long notices to six months.",
+      "enabled_for_runs": true
     },
     {
-      "key": "skills", "label": "IT skills",
-      "kano_paths": ["customFields.3.valueList", "customFields.3.value"],
-      "source_file": "modules/kano_panel_write.js", "account_specific": true,
-      "note": "Use discovered picklists and preserve existing tags. No implicit append in a missing-only run."
+      "key": "industry",
+      "label": "Industry",
+      "kano_paths": [
+        "customFields.1.valueList",
+        "customFields.1.value"
+      ],
+      "source_file": "modules/kano_panel_write.js",
+      "account_specific": true,
+      "note": "Observed multi-select in Kano's account. Independent of industry sub-category; verify IDs and options for the connected account.",
+      "enabled_for_runs": false
     },
     {
-      "key": "currency", "label": "Currency",
-      "kano_paths": ["customFields.4.value"],
-      "source_file": "modules/kano_salary_write.js", "account_specific": true,
-      "note": "Kano writes full option labels such as Malaysian Ringgit (MYR). Discover labels; do not send only an ISO code without checking the mapping."
+      "key": "industry_subcategory",
+      "label": "Industry sub-category",
+      "kano_paths": [
+        "customFields.2.valueList",
+        "customFields.2.value"
+      ],
+      "source_file": "modules/kano_panel_write.js",
+      "account_specific": true,
+      "note": "Independent multi-select in Kano. Do not infer parent-child coupling.",
+      "enabled_for_runs": false
     },
     {
-      "key": "residential_status", "label": "Residential status",
-      "kano_paths": ["customFields.5.value"],
-      "source_file": "modules/kano_panel_write.js", "account_specific": true,
-      "note": "Do not assume this picklist means nationality, visa, relocation, or work rights. Confirm its actual options and intended meaning."
+      "key": "skills",
+      "label": "IT skills",
+      "kano_paths": [
+        "customFields.3.valueList",
+        "customFields.3.value"
+      ],
+      "source_file": "modules/kano_panel_write.js",
+      "account_specific": true,
+      "note": "Use discovered picklists and preserve existing tags. No implicit append in a missing-only run.",
+      "enabled_for_runs": false
     },
     {
-      "key": "qualifications", "label": "Professional qualifications",
-      "kano_paths": ["customFields.7.valueList", "customFields.7.value"],
-      "source_file": "modules/kano_panel_write.js", "account_specific": true,
-      "note": "Account-specific multi-select. Existing values block a missing-only fill."
+      "key": "currency",
+      "label": "Currency",
+      "kano_paths": [
+        "customFields.4.value"
+      ],
+      "source_file": "modules/kano_salary_write.js",
+      "account_specific": true,
+      "note": "Kano writes full option labels such as Malaysian Ringgit (MYR). Discover labels; do not send only an ISO code without checking the mapping.",
+      "enabled_for_runs": false
     },
     {
-      "key": "source", "label": "Source",
-      "kano_paths": ["source"], "source_file": "modules/kano_panel_write.js",
-      "note": "Recruitment source is a separate field; do not infer it from a CV's contents."
+      "key": "residential_status",
+      "label": "Residential status",
+      "kano_paths": [
+        "customFields.5.value"
+      ],
+      "source_file": "modules/kano_panel_write.js",
+      "account_specific": true,
+      "note": "Do not assume this picklist means nationality, visa, relocation, or work rights. Confirm its actual options and intended meaning.",
+      "enabled_for_runs": false
     },
     {
-      "key": "state", "label": "State",
-      "kano_paths": ["address.state"], "source_file": "modules/kano_panel_write.js",
-      "note": "Kano has state/suburb shortcuts. Garbage Truck must not treat those distinct concepts as interchangeable."
+      "key": "qualifications",
+      "label": "Professional qualifications",
+      "kano_paths": [
+        "customFields.7.valueList",
+        "customFields.7.value"
+      ],
+      "source_file": "modules/kano_panel_write.js",
+      "account_specific": true,
+      "note": "Account-specific multi-select. Existing values block a missing-only fill.",
+      "enabled_for_runs": false
     },
     {
-      "key": "work_type", "label": "Work type",
-      "kano_paths": ["workType"], "source_file": "modules/kano_salary_api.js",
-      "note": "Observed as a protected field during salary updates, not a verified public-API write mapping."
+      "key": "source",
+      "label": "Source",
+      "kano_paths": [
+        "source"
+      ],
+      "source_file": "modules/kano_panel_write.js",
+      "note": "Recruitment source is a separate field; do not infer it from a CV's contents.",
+      "enabled_for_runs": false
+    },
+    {
+      "key": "state",
+      "label": "State",
+      "kano_paths": [
+        "address.state"
+      ],
+      "source_file": "modules/kano_panel_write.js",
+      "note": "Kano has state/suburb shortcuts. Garbage Truck must not treat those distinct concepts as interchangeable.",
+      "enabled_for_runs": true
+    },
+    {
+      "key": "work_type",
+      "label": "Work type",
+      "kano_paths": [
+        "workType"
+      ],
+      "source_file": "modules/kano_salary_api.js",
+      "note": "Observed as a protected field during salary updates, not a verified public-API write mapping.",
+      "enabled_for_runs": true
     }
   ]
 }

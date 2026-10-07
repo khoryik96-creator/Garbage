@@ -99,22 +99,52 @@ func ready(ctx context.Context, info instance) bool {
 	return response.StatusCode == 200 && json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&result) == nil && result.ID == info.ID
 }
 
-func reopen(ctx context.Context, path string, open func(string) error) error {
-	deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
+// acquireOrReopen retries the lock while an old instance drains requests.
+// A successful reopen returns a nil unlock; a new owner returns its lock.
+func acquireOrReopen(ctx context.Context, directory string, open func(string) error) (func(), error) {
+	deadline, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	manualURL := ""
 	for {
-		info, err := readInstance(path)
+		unlock, err := acquire(filepath.Join(directory, "app.lock"))
+		if err == nil {
+			return unlock, nil
+		}
+		if !errors.Is(err, errInUse) {
+			return nil, errors.New("The workspace folder cannot be opened.")
+		}
+		info, err := readInstance(filepath.Join(directory, "instance.json"))
 		if err == nil && ready(deadline, info) {
 			if open != nil {
-				return open(info.URL)
+				req, _ := http.NewRequestWithContext(deadline, http.MethodPost, info.URL+"api/desktop/reopen", nil)
+				req.Header.Set("X-Garbage-Instance", info.ID)
+				client := &http.Client{Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+				response, requestErr := client.Do(req)
+				if requestErr != nil {
+					// The owner may exit between readiness and IPC. Retry the lock
+					// instead of abandoning a requested replacement launch.
+					manualURL = info.URL
+				} else {
+					response.Body.Close()
+					if response.StatusCode == http.StatusNoContent {
+						return nil, nil
+					}
+					if response.StatusCode != http.StatusServiceUnavailable {
+						return nil, errors.New("The browser could not be opened. Open " + info.URL + " manually. See app.log for details.")
+					}
+				}
+			} else {
+				return nil, nil
 			}
-			return nil
 		}
 		select {
 		case <-deadline.Done():
-			return errors.New("Garbage Truck is already starting. Try opening it again in a moment.")
+			if manualURL != "" {
+				return nil, errors.New("The interface could not be reopened. If the app is still running, open " + manualURL + " manually. See app.log for details.")
+			}
+			return nil, errors.New("Garbage Truck is still starting or saving its work. Try opening it again in a moment. See app.log in your workspace folder for details.")
 		case <-ticker.C:
 		}
 	}
@@ -128,13 +158,13 @@ func Run(parent context.Context, options Options) error {
 	if err = os.MkdirAll(directory, 0700); err != nil {
 		return errors.New("The workspace folder cannot be created.")
 	}
-	unlock, err := acquire(filepath.Join(directory, "app.lock"))
+	unlock, err := acquireOrReopen(parent, directory, options.OpenBrowser)
 	path := filepath.Join(directory, "instance.json")
-	if errors.Is(err, errInUse) {
-		return reopen(parent, path, options.OpenBrowser)
-	}
 	if err != nil {
-		return errors.New("The workspace folder cannot be opened.")
+		return err
+	}
+	if unlock == nil {
+		return nil
 	}
 	defer unlock()
 	settings, err := config.Load()
@@ -143,14 +173,25 @@ func Run(parent context.Context, options Options) error {
 	}
 	settings.DatabasePath = filepath.Join(directory, "autocoder.db")
 	settings.EmbeddedWorker = true
+	settings.RecoverExclusive = true
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	info := instance{ID: domain.ID()}
-	app, err := application.Open(settings, web.Options{DesktopInstance: info.ID, Shutdown: cancel})
+	open := options.OpenBrowser
+	if open == nil {
+		open = OpenBrowser
+	}
+	app, err := application.Open(settings, web.Options{DesktopInstance: info.ID, DesktopReady: func() bool { return ctx.Err() == nil }, ReopenBrowser: func() error {
+		if err := open(info.URL); err != nil {
+			browserFailure(info.URL)
+			return err
+		}
+		return nil
+	}, Shutdown: cancel, SigningStatus: signingStatus()})
 	if err != nil {
 		return errors.New("Garbage Truck could not open its workspace. Your existing data has been kept.")
 	}
-	defer app.Close()
+	defer func() { _ = app.Close(); _ = os.Remove(path) }()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return errors.New("A local connection could not be opened.")
@@ -165,14 +206,13 @@ func Run(parent context.Context, options Options) error {
 	if err = os.WriteFile(path, data, 0600); err != nil {
 		return errors.New("Workspace startup information could not be saved.")
 	}
-	defer os.Remove(path)
 	if !ready(ctx, info) {
 		return errors.New("Garbage Truck did not finish starting. Try opening it again.")
 	}
 	log.Printf("Garbage Truck ready at %s", info.URL)
 	if options.OpenBrowser != nil {
 		if err = options.OpenBrowser(info.URL); err != nil {
-			ShowError("Your browser could not be opened automatically. Open " + info.URL + " to use Garbage Truck.")
+			browserFailure(info.URL)
 		}
 	}
 	select {

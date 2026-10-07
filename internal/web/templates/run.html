@@ -5,7 +5,7 @@
 <div>
 <p class="eyebrow">{{title .Run.Mode}} RUN · {{short .Run.ID}}
 </p>
-<h1>Country, one profile at a time.</h1>
+<h1>{{fieldLabels .Run.Fields}}, one profile at a time.</h1>
 <p class="intro">{{timestamp .Run.CreatedAt}} · All profiles · Empty fields only</p>
 </div>
 <span class="status state-{{.Run.State}}">{{title .Run.State}}
@@ -24,12 +24,13 @@
 </div>
 <progress value="{{.Run.Processed}}" max="{{maximum .Run.Total}}" aria-label="Profiles scanned">
 </progress>{{if .Run.Error}}
-<p class="warning">{{.Run.Error}} You can resume after correcting the cause.</p>{{end}}
+<p class="warning" role="status">{{.Run.Error}}</p>{{end}}
+<p class="hint" role="status">{{if eq .Run.State "running"}}Processing profiles. Progress is saved after each page; you can pause safely.{{else if eq .Run.State "queued"}}{{if .Job.Error}}Retry {{.Job.Attempts}} of 5. The next attempt starts after {{timestamp .Job.AvailableAt}}. Completed pages will be kept.{{else}}Waiting to process. This page updates automatically.{{end}}{{else if eq .Run.State "paused"}}Processing is paused. Choose Resume to continue from the last saved page.{{else if eq .Run.State "failed"}}Processing stopped after repeated failures. Check the document service or app log, then choose Resume to retry from the saved page.{{else if eq .Run.State "cancelled"}}This run was cancelled. Start a new run to scan again.{{else if eq .Run.Mode "preview"}}Preview complete. No profiles changed. Start a Review run to approve proposed values.{{else}}{{.Pending}} proposals still need review. {{.Applied}} approved changes can be undone below.{{end}}</p>
 <div class="run-metrics">
 <div>
 <strong>{{.Run.Missing}}
 </strong>
-<span>Missing Country</span>
+<span>Missing fields</span>
 </div>
 <div>
 <strong>{{.Run.Proposed}}
@@ -44,18 +45,18 @@
 <div>
 <strong>{{.Run.NotFound}}
 </strong>
-<span>No residence evidence</span>
+<span>No source evidence</span>
 </div>
 </div>
 </section>
 {{if eq .Run.Mode "preview"}}
 <div class="notice">
-<strong>Preview is read-only.</strong> These proposals cannot change a profile. Start a Review run when you want to approve changes.</div>{{else if ne .Run.State "completed"}}
+<strong>Preview is read-only.</strong> These proposals cannot change a profile.{{if eq .Run.State "completed"}}<form method="post" action="/runs"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="mode" value="review">{{range .Run.Fields}}<input type="hidden" name="fields" value="{{.}}">{{end}}<input type="hidden" name="protection" value="{{.Run.Protection}}"><button class="button primary small">Start a Review run</button></form><span class="hint">Review scans the latest profiles and checks the evidence again.</span>{{else}} Start a Review run when you want to approve changes.{{end}}</div>{{else if ne .Run.State "completed"}}
 <div class="notice">Review controls become available when this run completes.</div>{{end}}
 <div class="section-heading">
 <div>
 <p class="eyebrow">CHECK THE SOURCE</p>
-<h2>Country proposals</h2>
+<h2>Field proposals{{if eq .Run.Mode "review"}} · {{.Pending}} awaiting review{{end}}</h2>
 </div>
 <span class="muted">Showing up to 50</span>
 </div>
@@ -73,9 +74,9 @@
 </span>
 </div>
 <div class="proposal">
-<span>Missing Country</span>
+<span>Missing {{fieldLabel .Field}}</span>
 <span aria-hidden="true">→</span>
-<strong>{{if .Value}}{{country .Value}}{{else}}Needs your decision{{end}}
+<strong>{{if .Value}}{{if eq .Field "country"}}{{country .Value}}{{else}}{{.Value}}{{end}}{{else}}Needs your decision{{end}}
 </strong>{{if .Value}}
 <code>{{.Value}}
 </code>{{end}}
@@ -85,16 +86,14 @@
 {{if and (eq .State "pending") (eq $run.State "completed")}}
 <form method="post" action="/suggestions/{{.ID}}/approve" class="approval-form">
 <input type="hidden" name="_csrf" value="{{$root.CSRF}}">
-<label for="country-{{.ID}}">Country to approve</label>
-<select id="country-{{.ID}}" name="value" required>
-<option value="">Choose a country</option>{{range $root.Countries}}
-<option value="{{.Code}}" {{if selected $s.Value .Code}}selected{{end}}>{{.Name}} ({{.Code}})</option>{{end}}
-</select>
+<label for="value-{{.ID}}">{{fieldLabel .Field}} to approve</label>{{if eq .Field "country"}}
+<select id="value-{{.ID}}" name="value" required><option value="">Choose a country</option>{{range $root.Countries}}<option value="{{.Code}}" {{if selected $s.Value .Code}}selected{{end}}>{{.Name}} ({{.Code}})</option>{{end}}</select>
+{{else}}<input id="value-{{.ID}}" name="value" value="{{if .Value}}{{.Value}}{{end}}" required maxlength="500">{{end}}
 <label for="reason-{{.ID}}">Correction note <small>Required if you change the proposal</small>
 </label>
 <input id="reason-{{.ID}}" name="reason" maxlength="500" placeholder="Explain your correction">
 <div class="actions">
-<button class="button primary small">Approve Country</button>
+<button class="button primary small">Approve {{fieldLabel .Field}}</button>
 <button class="button secondary small" form="reject-{{.ID}}">Reject</button>
 </div>
 </form>
@@ -110,13 +109,13 @@
 <blockquote>{{.Quote}}
 </blockquote>
 </div>{{end}}
-<span class="confidence {{.Confidence}}">{{if eq .Confidence "high"}}Explicit residence evidence{{else}}Source requires review{{end}}
+<span class="confidence {{.Confidence}}">{{if eq .Confidence "high"}}Explicit source evidence{{else}}Source requires review{{end}}
 </span>
 </aside>
 </article>{{else}}
 <div class="card empty-state">
 <h3>No proposals on this page.</h3>
-<p>This page updates as profiles are processed. A proposal needs explicit residence evidence.</p>
+<p>This page updates as profiles are processed. A proposal needs explicit source evidence.</p>
 </div>{{end}}
 {{if .NextCursor}}
 <a class="button secondary" href="/runs/{{.Run.ID}}?after={{.NextCursor}}">Next proposals →</a>{{end}}
@@ -133,6 +132,7 @@
 <thead>
 <tr>
 <th>Profile</th>
+<th>Field</th>
 <th>Before</th>
 <th>After</th>
 <th>Status</th>
@@ -143,9 +143,10 @@
 <tr>
 <td>#{{.CandidateID}}
 </td>
+<td>{{fieldLabel .Field}}</td>
 <td>{{emptyValue .BeforeValue}}
 </td>
-<td>{{countryCode .AfterValue}}
+<td>{{if eq .Field "country"}}{{countryCode .AfterValue}}{{else}}{{.AfterValue}}{{end}}
 </td>
 <td>{{title .State}}
 </td>
@@ -159,6 +160,6 @@
 </tbody>
 </table>
 </div>
-<p class="hint">Undo restores the original empty value only if the profile has not changed since approval. Latest 50 changes shown.</p>
+<p class="hint">Undo restores the original empty value only if no outside edits have occurred since approval. Latest 50 changes shown.</p>
 </section>{{end}}
 </div>{{template "bottom" .}}{{end}}

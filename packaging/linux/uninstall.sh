@@ -7,6 +7,6 @@ if [ -f "$data_root/GarbageTruck/app.lock" ] && command -v flock >/dev/null 2>&1
   echo "Quit Garbage Truck from its app menu before uninstalling." >&2
   exit 1
 fi
-rm -f "$data_root/applications/garbage-truck.desktop" "$app_dir/garbage-truck-desktop" "$app_dir/icon.svg" "$app_dir/uninstall.sh"
+rm -f "$data_root/applications/garbage-truck.desktop" "$app_dir/garbage-truck-desktop" "$app_dir/launch.sh" "$app_dir/icon.svg" "$app_dir/uninstall.sh"
 rmdir "$app_dir" 2>/dev/null || true
 printf '%s\n' "Garbage Truck is uninstalled. Your saved workspace in $data_root/GarbageTruck has been kept."

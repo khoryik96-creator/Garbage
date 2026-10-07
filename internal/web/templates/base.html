@@ -24,12 +24,13 @@
 <a href="/" {{if eq .Path "/"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-overview"}}</span>Overview</a>
 <a href="/runs" {{if prefix .Path "/runs"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-runs"}}</span>Run history</a>
 <a href="/profiles" {{if eq .Path "/profiles"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-profiles"}}</span>Profiles</a>
+{{if .Connection.Connected}}<a href="/jobadder/profiles" {{if eq .Path "/jobadder/profiles"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-profiles"}}</span>JobAdder profiles</a>{{end}}
 <a href="/audit" {{if eq .Path "/audit"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-audit"}}</span>Audit trail</a>
 <p class="nav-caption">PREFERENCES</p>
 <a href="/settings" {{if eq .Path "/settings"}}aria-current="page"{{end}}><span class="nav-icon">{{template "icon-settings"}}</span>Workspace settings</a>
 </nav>
 <div class="sidebar-bottom">
-<div class="workspace-card"><span class="workspace-avatar" aria-hidden="true">D</span><div><strong>Demo workspace</strong><small>Sample profiles · Local data</small></div></div>
+<div class="workspace-card"><span class="workspace-avatar" aria-hidden="true">{{if .Live}}J{{else}}D{{end}}</span><div><strong>{{if .Live}}JobAdder account{{else}}Demo workspace{{end}}</strong><small>{{if .Live}}Live profiles · Read-only{{else}}Sample profiles · Local data{{end}}</small></div></div>
 {{if .Desktop}}<form action="/desktop/quit" method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="quit-button" type="submit">Quit Garbage Truck</button></form>{{end}}
 <small class="sidebar-version">{{if .Version}}Version {{.Version}}{{else}}Development workspace{{end}}</small>
 </div>
@@ -37,14 +38,14 @@
 <div class="application-shell">
 <header class="workspace-bar">
 <div class="breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong>{{.PageTitle}}</strong></div>
-<div class="header-actions"><span class="demo-badge"><span class="dot"></span>Demo data</span><a class="button primary small" href="/#start-run">＋ New run</a></div>
+<div class="header-actions"><span class="demo-badge"><span class="dot"></span>{{if .Live}}JobAdder data{{else}}Demo data{{end}}</span>{{if not .Live}}<a class="button primary small" href="/#start-run">＋ New run</a>{{end}}</div>
 </header>
 <main id="main-content" tabindex="-1">{{end}}
 {{define "bottom"}}
 </main>
 <footer>
 <span>Garbage Truck · Your workspace, on your computer</span>
-<span>Demo profiles · JobAdder connection coming next</span>
+<span>Demo workspace · JobAdder read-only connection</span>
 </footer>
 </div>
 </body>

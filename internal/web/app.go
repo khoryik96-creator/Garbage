@@ -16,9 +16,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/khoryik96-creator/Garbage/internal/audit"
+	"github.com/khoryik96-creator/Garbage/internal/connectors/jobadder"
 	"github.com/khoryik96-creator/Garbage/internal/domain"
 	"github.com/khoryik96-creator/Garbage/internal/policy"
 	"github.com/khoryik96-creator/Garbage/internal/storage"
@@ -37,10 +39,14 @@ type App struct {
 
 // Options describes the host; installed and developer workspaces share the same UI.
 type Options struct {
+	JobAdder        *jobadder.Connection
 	Version         string
 	DatabasePath    string
 	DocumentWorker  bool
 	DesktopInstance string
+	DesktopReady    func() bool
+	ReopenBrowser   func() error
+	SigningStatus   string
 	Shutdown        func()
 }
 
@@ -48,7 +54,13 @@ func New(s *storage.Store, embedded bool) (http.Handler, error) {
 	return NewWithOptions(s, embedded, Options{})
 }
 func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Handler, error) {
-	functions := template.FuncMap{"prefix": strings.HasPrefix, "short": func(s string) string { return s[:min(8, len(s))] }, "shortPointer": func(s *string) string {
+	functions := template.FuncMap{"fieldLabel": domain.FieldLabel, "fieldLabels": func(fields []string) string {
+		labels := []string{}
+		for _, f := range fields {
+			labels = append(labels, domain.FieldLabel(f))
+		}
+		return strings.Join(labels, ", ")
+	}, "prefix": strings.HasPrefix, "short": func(s string) string { return s[:min(8, len(s))] }, "shortPointer": func(s *string) string {
 		if s == nil {
 			return ""
 		}
@@ -61,7 +73,15 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 		return strings.Join(words, " ")
 	}, "timestamp": func(v float64) string {
 		return time.Unix(int64(v), 0).In(time.FixedZone("MYT", 8*3600)).Format("02 Jan 2006 · 15:04 MYT")
-	}, "country": policy.Name, "countryCode": func(v string) string { return policy.Name(&v) }, "emptyValue": func(v *string) string {
+	}, "country": policy.Name, "countryCode": func(v string) string { return policy.Name(&v) }, "liveValue": func(v *string) string {
+		if v == nil {
+			return "Not returned"
+		}
+		if domain.Empty(v) {
+			return "Empty"
+		}
+		return *v
+	}, "emptyValue": func(v *string) string {
 		if domain.Empty(v) {
 			return "Empty"
 		}
@@ -80,6 +100,7 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 		return nil, err
 	}
 	a := &App{Store: s, Review: audit.New(s), Templates: templates, EmbeddedWorker: embedded, Options: options}
+	var stopping atomic.Bool
 	mux := http.NewServeMux()
 	static, _ := fs.Sub(assets, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
@@ -108,8 +129,18 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 	mux.HandleFunc("GET /audit", a.auditPage)
 	mux.HandleFunc("GET /runs", a.runsPage)
 	mux.HandleFunc("GET /settings", a.settingsPage)
+	mux.HandleFunc("POST /jobadder/connect", a.connectJobAdder)
+	mux.HandleFunc("POST /jobadder/cancel", a.cancelJobAdder)
+	mux.HandleFunc("POST /jobadder/disconnect", a.disconnectJobAdder)
+	mux.HandleFunc("GET /jobadder/profiles", a.jobAdderProfiles)
+	mux.HandleFunc("POST /workspace/backup", a.backupWorkspace)
+	mux.HandleFunc("POST /workspace/restore", a.restoreWorkspace)
 	if options.DesktopInstance != "" && options.Shutdown != nil {
 		mux.HandleFunc("GET /api/desktop/instance", func(w http.ResponseWriter, r *http.Request) {
+			if stopping.Load() || (options.DesktopReady != nil && !options.DesktopReady()) {
+				jsonResponse(w, 503, map[string]string{"status": "saving"})
+				return
+			}
 			jsonResponse(w, 200, map[string]string{"instance_id": options.DesktopInstance})
 		})
 		mux.HandleFunc("POST /desktop/quit", func(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +148,7 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 				a.fail(w, r, err, 0)
 				return
 			}
+			stopping.Store(true)
 			nonce := domain.ID()
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+nonce+"'; frame-ancestors 'none'; base-uri 'none'")
 			a.render(w, r, "closed", map[string]any{"ClosedNonce": nonce}, 200)
@@ -129,11 +161,36 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 	mux.HandleFunc("POST /suggestions/{id}/approve", a.approve)
 	mux.HandleFunc("POST /suggestions/{id}/reject", a.reject)
 	mux.HandleFunc("POST /writebacks/{id}/undo", a.undo)
-	return a.secure(mux), nil
+	secured := a.secure(mux)
+	// This host-only IPC route uses a per-instance capability from the private
+	// workspace metadata, rather than a browser cookie. It cannot be invoked by
+	// a cross-origin form, and never accepts a URL from the caller.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/desktop/reopen" {
+			secured.ServeHTTP(w, r)
+			return
+		}
+		if r.Method != http.MethodPost || options.DesktopInstance == "" || options.ReopenBrowser == nil || r.Header.Get("Origin") != "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Garbage-Instance")), []byte(options.DesktopInstance)) != 1 {
+			http.Error(w, "Invalid desktop request.", http.StatusForbidden)
+			return
+		}
+		if stopping.Load() || (options.DesktopReady != nil && !options.DesktopReady()) {
+			http.Error(w, "The app is saving.", http.StatusServiceUnavailable)
+			return
+		}
+		if err := options.ReopenBrowser(); err != nil {
+			http.Error(w, "Browser unavailable; see app.log for the manual URL.", http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}), nil
 }
 func (a *App) secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		if r.URL.Path == "/settings" || r.URL.Path == "/jobadder/connect" {
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; form-action 'self' https://id.jobadder.com; frame-ancestors 'none'; base-uri 'none'")
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "same-origin")
@@ -145,7 +202,11 @@ func (a *App) secure(next http.Handler) http.Handler {
 			http.Error(w, "Unrecognized Host.", 400)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		limit := int64(1 << 20)
+		if r.URL.Path == "/workspace/restore" {
+			limit = maxRestoreBytes + (1 << 20)
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		cookie, err := r.Cookie("gt_csrf")
 		token := ""
 		if err == nil {
@@ -156,6 +217,10 @@ func (a *App) secure(next http.Handler) http.Handler {
 		}
 		http.SetCookie(w, &http.Cookie{Name: "gt_csrf", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil})
 		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
+			if err != nil || len(cookie.Value) != 32 {
+				a.fail(w, r, domain.Invalid("Refresh the page before submitting changes."), 403)
+				return
+			}
 			scheme := "http"
 			if r.TLS != nil {
 				scheme = "https"
@@ -165,8 +230,16 @@ func (a *App) secure(next http.Handler) http.Handler {
 				return
 			}
 			supplied := r.Header.Get("X-CSRF-Token")
-			if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
-				if err := r.ParseForm(); err != nil {
+			contentType := r.Header.Get("Content-Type")
+			if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") || strings.HasPrefix(contentType, "multipart/form-data") {
+				parseErr := r.ParseForm()
+				if strings.HasPrefix(contentType, "multipart/form-data") {
+					parseErr = r.ParseMultipartForm(1 << 20)
+					if r.MultipartForm != nil {
+						defer r.MultipartForm.RemoveAll()
+					}
+				}
+				if parseErr != nil {
 					a.fail(w, r, domain.Invalid("Invalid form."), 422)
 					return
 				}
@@ -269,8 +342,14 @@ func (a *App) render(w http.ResponseWriter, r *http.Request, name string, data m
 	data["CSRF"] = token
 	data["Path"] = r.URL.Path
 	data["Countries"] = policy.Countries
+	catalog, _ := domain.Catalog()
+	data["FieldCatalog"] = catalog.Fields
+	if a.Options.JobAdder != nil {
+		data["Connection"] = a.Options.JobAdder.Status()
+	}
 	data["Desktop"] = a.Options.DesktopInstance != "" && a.Options.Shutdown != nil
 	data["Version"] = a.Options.Version
+	data["SigningStatus"] = a.Options.SigningStatus
 	titles := map[string]string{"dashboard": "Overview", "runs": "Run history", "run": "Country review", "profiles": "Profiles", "audit": "Audit trail", "settings": "Workspace settings", "docs": "API reference", "closed": "App closed", "error": "Something needs attention"}
 	data["PageTitle"] = titles[name]
 	var output bytes.Buffer
@@ -372,9 +451,10 @@ func (a *App) newRun(w http.ResponseWriter, r *http.Request) {
 	if api(r) {
 		err = decode(r, &request)
 	} else {
-		err = formKeys(r, "mode", "fields")
+		err = formKeys(r, "mode", "fields", "protection")
 		request.Mode = r.PostForm.Get("mode")
 		request.Fields = r.PostForm["fields"]
+		request.Protection = r.PostForm.Get("protection")
 	}
 	if err == nil {
 		err = request.Validate()
@@ -608,7 +688,7 @@ func (a *App) settingsPage(w http.ResponseWriter, r *http.Request) {
 		}
 		directory = filepath.Dir(path)
 	}
-	a.render(w, r, "settings", map[string]any{"Counts": counts, "DataDirectory": directory, "DocumentWorker": a.Options.DocumentWorker, "EmbeddedWorker": a.EmbeddedWorker}, 200)
+	a.render(w, r, "settings", map[string]any{"Counts": counts, "DataDirectory": directory, "DocumentWorker": a.Options.DocumentWorker, "EmbeddedWorker": a.EmbeddedWorker, "Restored": r.URL.Query().Get("restored") == "1"}, 200)
 }
 
 func (a *App) runPage(w http.ResponseWriter, r *http.Request) {
@@ -628,6 +708,21 @@ func (a *App) runPage(w http.ResponseWriter, r *http.Request) {
 			items = items[:50]
 		}
 		writes, e := repo.Writes(run.ID)
+		if e != nil {
+			return e
+		}
+		job, e := repo.JobStatus(run.ID)
+		if e != nil {
+			return e
+		}
+		var pending, applied int
+		if e = repo.Tx.QueryRow("SELECT COUNT(*) FROM suggestions WHERE run_id=? AND state='pending'", run.ID).Scan(&pending); e != nil {
+			return e
+		}
+		if e = repo.Tx.QueryRow("SELECT COUNT(*) FROM writebacks WHERE run_id=? AND state='applied'", run.ID).Scan(&applied); e != nil {
+			return e
+		}
+		data["Job"], data["Pending"], data["Applied"] = job, pending, applied
 		data["Run"], data["Suggestions"], data["NextCursor"], data["Writes"] = run, items, next, writes
 		return e
 	})
