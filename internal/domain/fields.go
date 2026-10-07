@@ -37,21 +37,33 @@ func Catalog() (FieldCatalog, error) {
 		return c, err
 	}
 	seen := map[string]bool{}
-	enabled := 0
 	for _, f := range c.Fields {
 		if seen[f.Key] {
 			return c, fmt.Errorf("duplicate field key")
 		}
 		seen[f.Key] = true
-		if f.EnabledForRuns {
-			enabled++
-			if f.Key != "country" {
-				return c, fmt.Errorf("unsupported run field")
-			}
-		}
-	}
-	if enabled != 1 {
-		return c, fmt.Errorf("Country must be enabled")
 	}
 	return c, nil
+}
+
+func RunField(key string) bool {
+	catalog, err := Catalog()
+	if err != nil {
+		return false
+	}
+	for _, f := range catalog.Fields {
+		if f.Key == key {
+			return f.EnabledForRuns
+		}
+	}
+	return false
+}
+func FieldLabel(key string) string {
+	catalog, _ := Catalog()
+	for _, f := range catalog.Fields {
+		if f.Key == key {
+			return f.Label
+		}
+	}
+	return key
 }

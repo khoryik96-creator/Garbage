@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -123,19 +124,23 @@ func validateBackup(ctx context.Context, db *sql.DB) error {
 		return domain.Invalid("The backup is damaged or is not a SQLite database.")
 	}
 	var version, count int
-	if err := db.QueryRowContext(ctx, "SELECT MAX(version),COUNT(*) FROM schema_migrations").Scan(&version, &count); err != nil || version != 1 || count != 1 {
+	if err := db.QueryRowContext(ctx, "SELECT MAX(version),COUNT(*) FROM schema_migrations").Scan(&version, &count); err != nil || (version != 1 && version != 2) || count != version {
 		return domain.Invalid("This backup has an unsupported workspace version.")
 	}
 	var unsafe int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type IN ('trigger','view') OR (type='table' AND name NOT IN ('schema_migrations','demo_candidates','runs','jobs','suggestions','writebacks','audit_events'))").Scan(&unsafe); err != nil || unsafe != 0 {
 		return domain.Invalid("The backup contains an unsupported database schema.")
 	}
+	runFields, writeFields := runColumns, writeColumns
+	if version == 1 {
+		runFields, writeFields = legacyRunColumns, legacyWriteColumns
+	}
 	projections := []string{
 		"SELECT " + candidateColumns + " FROM demo_candidates LIMIT 0",
-		"SELECT " + runColumns + " FROM runs LIMIT 0",
+		"SELECT " + runFields + " FROM runs LIMIT 0",
 		"SELECT id,state,attempts,available_at,lease_until,token,error FROM jobs LIMIT 0",
 		"SELECT id,run_id,candidate_id,field,value,confidence,evidence,reason,state FROM suggestions LIMIT 0",
-		"SELECT " + writeColumns + " FROM writebacks LIMIT 0",
+		"SELECT " + writeFields + " FROM writebacks LIMIT 0",
 		"SELECT id,run_id,candidate_id,action,details,created_at FROM audit_events LIMIT 0",
 	}
 	for _, query := range projections {
@@ -158,8 +163,8 @@ func validateBackup(ctx context.Context, db *sql.DB) error {
 	checks := []string{
 		"SELECT COUNT(*) FROM demo_candidates WHERE NOT json_valid(other_fields) OR json_type(other_fields)!='object' OR version<1",
 		"SELECT COUNT(*) FROM demo_candidates,json_each(other_fields) WHERE json_each.type!='text'",
-		"SELECT COUNT(*) FROM runs WHERE NOT json_valid(fields) OR json_type(fields)!='array' OR json_array_length(fields)!=1 OR json_extract(fields,'$[0]')!='country' OR mode NOT IN ('preview','review') OR state NOT IN ('queued','running','completed','paused','failed','cancelled') OR processed<0 OR processed>total",
-		"SELECT COUNT(*) FROM suggestions WHERE NOT json_valid(evidence) OR json_type(evidence)!='array' OR field!='country' OR run_id NOT IN (SELECT id FROM runs) OR candidate_id NOT IN (SELECT id FROM demo_candidates)",
+		"SELECT COUNT(*) FROM runs WHERE NOT json_valid(fields) OR json_type(fields)!='array' OR json_array_length(fields)<1 OR json_array_length(fields)>20 OR mode NOT IN ('preview','review') OR state NOT IN ('queued','running','completed','paused','failed','cancelled') OR processed<0 OR processed>total",
+		"SELECT COUNT(*) FROM suggestions WHERE NOT json_valid(evidence) OR json_type(evidence)!='array' OR run_id NOT IN (SELECT id FROM runs) OR candidate_id NOT IN (SELECT id FROM demo_candidates)",
 		"SELECT COUNT(*) FROM suggestions,json_each(evidence) WHERE json_each.type!='object' OR json_type(json_each.value,'$.source') IS NOT 'text' OR json_type(json_each.value,'$.quote') IS NOT 'text'",
 		"SELECT COUNT(*) FROM writebacks WHERE suggestion_id NOT IN (SELECT id FROM suggestions) OR run_id NOT IN (SELECT id FROM runs) OR candidate_id NOT IN (SELECT id FROM demo_candidates)",
 		"SELECT COUNT(*) FROM jobs WHERE state NOT IN ('queued','leased','done','failed') OR attempts<0 OR id NOT IN (SELECT id FROM runs)",
@@ -178,9 +183,42 @@ func validateBackup(ctx context.Context, db *sql.DB) error {
 		read  func(scanner) error
 	}{
 		{"SELECT " + candidateColumns + " FROM demo_candidates", func(row scanner) error { _, err := scanCandidate(row); return err }},
-		{"SELECT " + runColumns + " FROM runs", func(row scanner) error { _, err := scanRun(row); return err }},
-		{"SELECT " + suggestionColumns + " FROM suggestions s JOIN demo_candidates c ON c.id=s.candidate_id", func(row scanner) error { _, err := scanSuggestion(row); return err }},
-		{"SELECT " + writeColumns + " FROM writebacks", func(row scanner) error { _, err := scanWrite(row); return err }},
+		{"SELECT " + runFields + " FROM runs", func(row scanner) error {
+			var run domain.Run
+			var raw string
+			args := []any{&run.ID, &run.Mode, &raw, &run.State, &run.Total, &run.Processed, &run.Missing, &run.Proposed, &run.Existing, &run.NotFound, &run.Cursor, &run.UpperBound, &run.CreatedAt, &run.Error}
+			if version == 2 {
+				args = append(args, &run.Protection)
+			}
+			if err := row.Scan(args...); err != nil {
+				return err
+			}
+			if err := json.Unmarshal([]byte(raw), &run.Fields); err != nil {
+				return err
+			}
+			return (domain.RunRequest{Fields: run.Fields, Mode: run.Mode, Protection: run.Protection}).Validate()
+		}},
+		{"SELECT " + suggestionColumns + " FROM suggestions s JOIN demo_candidates c ON c.id=s.candidate_id", func(row scanner) error {
+			s, err := scanSuggestion(row)
+			if err == nil && !domain.RunField(s.Field) {
+				return domain.Invalid("Unsupported proposal field.")
+			}
+			return err
+		}},
+		{"SELECT " + writeFields + " FROM writebacks", func(row scanner) error {
+			var w domain.Writeback
+			args := []any{&w.ID, &w.SuggestionID, &w.RunID, &w.CandidateID, &w.BeforeValue, &w.AfterValue, &w.AfterVersion, &w.State, &w.CreatedAt}
+			if version == 2 {
+				args = append(args, &w.Field, &w.GuardVersion)
+			}
+			if err := row.Scan(args...); err != nil {
+				return err
+			}
+			if version == 2 && !domain.RunField(w.Field) {
+				return domain.Invalid("Unsupported writeback field.")
+			}
+			return nil
+		}},
 		{"SELECT id,state,attempts,available_at,lease_until,token,error FROM jobs", func(row scanner) error {
 			var id, state string
 			var attempts int
@@ -232,11 +270,38 @@ func (s *Store) Restore(ctx context.Context, path string) (string, error) {
 	if err = validateBackup(ctx, source); err != nil {
 		return "", err
 	}
+	stage, err := os.CreateTemp(filepath.Dir(s.Path), ".restore-prepared-*.db")
+	if err != nil {
+		return "", err
+	}
+	stagePath := stage.Name()
+	if err = stage.Close(); err != nil {
+		return "", err
+	}
+	defer os.Remove(stagePath)
+	prepared, err := backupDB(stagePath, false)
+	if err != nil {
+		return "", err
+	}
+	defer prepared.Close()
+	if err = copySQLite(ctx, prepared, source); err != nil {
+		return "", err
+	}
+	source = prepared
 	tx, err := source.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
+	var version int
+	if err = tx.QueryRowContext(ctx, "SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
+		return "", err
+	}
+	if version == 1 {
+		if _, err = tx.ExecContext(ctx, migration2); err != nil {
+			return "", err
+		}
+	}
 	if _, err = tx.ExecContext(ctx, "UPDATE runs SET state='paused',error=NULL WHERE state IN ('queued','running'); UPDATE jobs SET state='queued',token=NULL,lease_until=NULL,available_at=0,attempts=0,error=NULL WHERE id IN (SELECT id FROM runs WHERE state='paused')"); err != nil {
 		return "", err
 	}

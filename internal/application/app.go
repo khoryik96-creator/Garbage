@@ -4,8 +4,10 @@ package application
 import (
 	"context"
 	"errors"
+	"github.com/khoryik96-creator/Garbage/internal/connectors/jobadder"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -17,13 +19,14 @@ import (
 	"github.com/khoryik96-creator/Garbage/internal/web"
 )
 
-var Version = "0.4.1"
+var Version = "0.5.0"
 
 type App struct {
 	Store          *storage.Store
 	Handler        http.Handler
 	Worker         *jobs.Worker
 	EmbeddedWorker bool
+	Connection     *jobadder.Connection
 }
 
 func Open(settings config.Settings, options web.Options) (*App, error) {
@@ -40,25 +43,38 @@ func Open(settings config.Settings, options web.Options) (*App, error) {
 			return closeOnError(err)
 		}
 	}
+	directory, err := filepath.Abs(filepath.Dir(settings.DatabasePath))
+	if err != nil {
+		return closeOnError(err)
+	}
+	connection := jobadder.NewConnection(jobadder.NewVault(directory))
+	options.JobAdder = connection
 	options.Version = Version
 	options.DatabasePath = settings.DatabasePath
 	options.DocumentWorker = settings.DocumentWorkerURL != ""
 	handler, err := web.NewWithOptions(store, settings.EmbeddedWorker, options)
 	if err != nil {
+		connection.Close()
 		return closeOnError(err)
 	}
 	worker := jobs.New(store, settings.PageSize)
 	if settings.DocumentWorkerURL != "" {
 		client, err := docworker.New(settings.DocumentWorkerURL)
 		if err != nil {
+			connection.Close()
 			return closeOnError(err)
 		}
 		worker.Extractor = client
 	}
-	return &App{Store: store, Handler: handler, Worker: worker, EmbeddedWorker: settings.EmbeddedWorker}, nil
+	return &App{Store: store, Handler: handler, Worker: worker, EmbeddedWorker: settings.EmbeddedWorker, Connection: connection}, nil
 }
 
-func (a *App) Close() error { return a.Store.Close() }
+func (a *App) Close() error {
+	if a.Connection != nil {
+		a.Connection.Close()
+	}
+	return a.Store.Close()
+}
 
 // Serve owns worker and HTTP shutdown. Callers close the database after it returns.
 func (a *App) Serve(parent context.Context, listener net.Listener) error {

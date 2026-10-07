@@ -66,7 +66,13 @@ func Open(path string) (*Store, error) {
 		if err := r.Tx.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 			return err
 		}
-		if version != 1 {
+		if version == 1 {
+			if _, err := r.Tx.Exec(migration2); err != nil {
+				return err
+			}
+			version = 2
+		}
+		if version != 2 {
 			return domain.Invalid("Unsupported database version.")
 		}
 		return nil
@@ -224,12 +230,14 @@ func (r *Repository) EditCountry(id int, value *string) (domain.Candidate, error
 	return r.Candidate(id)
 }
 
-const runColumns = "id,mode,fields,state,total,processed,missing,proposed,existing,not_found,cursor,upper_bound,created_at,error"
+const legacyRunColumns = "id,mode,fields,state,total,processed,missing,proposed,existing,not_found,cursor,upper_bound,created_at,error"
+
+const runColumns = legacyRunColumns + ",protection"
 
 func scanRun(row scanner) (domain.Run, error) {
 	var r domain.Run
 	var fields string
-	err := row.Scan(&r.ID, &r.Mode, &fields, &r.State, &r.Total, &r.Processed, &r.Missing, &r.Proposed, &r.Existing, &r.NotFound, &r.Cursor, &r.UpperBound, &r.CreatedAt, &r.Error)
+	err := row.Scan(&r.ID, &r.Mode, &fields, &r.State, &r.Total, &r.Processed, &r.Missing, &r.Proposed, &r.Existing, &r.NotFound, &r.Cursor, &r.UpperBound, &r.CreatedAt, &r.Error, &r.Protection)
 	if err != nil {
 		return r, found(err)
 	}
@@ -246,8 +254,11 @@ func (r *Repository) NewRun(request domain.RunRequest) (domain.Run, error) {
 	if err != nil {
 		return domain.Run{}, err
 	}
+	if request.Protection == "" {
+		request.Protection = "fill_blanks"
+	}
 	id := domain.ID()
-	_, err = r.Tx.Exec("INSERT INTO runs("+runColumns+") VALUES(?,?,?,'queued',?,0,0,0,0,0,0,?,?,NULL)", id, request.Mode, encode(request.Fields), counts.Total, counts.UpperBound, Now())
+	_, err = r.Tx.Exec("INSERT INTO runs("+runColumns+") VALUES(?,?,?,'queued',?,0,0,0,0,0,0,?,?,NULL,?)", id, request.Mode, encode(request.Fields), counts.Total, counts.UpperBound, Now(), request.Protection)
 	if err != nil {
 		return domain.Run{}, err
 	}
@@ -255,7 +266,7 @@ func (r *Repository) NewRun(request domain.RunRequest) (domain.Run, error) {
 	if err != nil {
 		return domain.Run{}, err
 	}
-	if err = r.Audit("run_created", &id, nil, map[string]any{"mode": request.Mode, "fields": request.Fields}); err != nil {
+	if err = r.Audit("run_created", &id, nil, map[string]any{"mode": request.Mode, "fields": request.Fields, "protection": request.Protection}); err != nil {
 		return domain.Run{}, err
 	}
 	return r.Run(id)
@@ -318,11 +329,14 @@ func (r *Repository) ChangeRun(id, action string) (domain.Run, error) {
 	return r.Run(id)
 }
 func (r *Repository) AddSuggestion(run domain.Run, c domain.Candidate, e domain.Extraction) error {
+	return r.AddFieldSuggestion(run, c, "country", e)
+}
+func (r *Repository) AddFieldSuggestion(run domain.Run, c domain.Candidate, field string, e domain.Extraction) error {
 	state := "pending"
 	if run.Mode == "preview" {
 		state = "preview"
 	}
-	_, err := r.Tx.Exec("INSERT INTO suggestions(id,run_id,candidate_id,field,value,confidence,evidence,reason,state) VALUES(?,?,?,'country',?,?,?,?,?)", domain.ID(), run.ID, c.ID, e.Value, e.Confidence, encode(e.Evidence), e.Reason, state)
+	_, err := r.Tx.Exec("INSERT INTO suggestions(id,run_id,candidate_id,field,value,confidence,evidence,reason,state) VALUES(?,?,?,?,?,?,?,?,?)", domain.ID(), run.ID, c.ID, field, e.Value, e.Confidence, encode(e.Evidence), e.Reason, state)
 	return err
 }
 
@@ -360,16 +374,21 @@ func (r *Repository) SuggestionState(id, expected, state string) error {
 	return changed(r.Tx.Exec("UPDATE suggestions SET state=? WHERE id=? AND state=?", state, id, expected))
 }
 
-const writeColumns = "id,suggestion_id,run_id,candidate_id,before_value,after_value,after_version,state,created_at"
+const legacyWriteColumns = "id,suggestion_id,run_id,candidate_id,before_value,after_value,after_version,state,created_at"
+
+const writeColumns = legacyWriteColumns + ",field,guard_version"
 
 func scanWrite(row scanner) (domain.Writeback, error) {
 	var w domain.Writeback
-	err := row.Scan(&w.ID, &w.SuggestionID, &w.RunID, &w.CandidateID, &w.BeforeValue, &w.AfterValue, &w.AfterVersion, &w.State, &w.CreatedAt)
+	err := row.Scan(&w.ID, &w.SuggestionID, &w.RunID, &w.CandidateID, &w.BeforeValue, &w.AfterValue, &w.AfterVersion, &w.State, &w.CreatedAt, &w.Field, &w.GuardVersion)
 	return w, found(err)
 }
 func (r *Repository) RecordWrite(s domain.Suggestion, before, after domain.Candidate) (string, error) {
+	if err := r.AdvanceUndoGuards(before.ID, before.Version, after.Version); err != nil {
+		return "", err
+	}
 	id := domain.ID()
-	_, err := r.Tx.Exec("INSERT INTO writebacks("+writeColumns+") VALUES(?,?,?,?,?,?,?,'applied',?)", id, s.ID, s.RunID, s.CandidateID, before.Country, after.Country, after.Version, Now())
+	_, err := r.Tx.Exec("INSERT INTO writebacks("+writeColumns+") VALUES(?,?,?,?,?,?,?,'applied',?,?,?)", id, s.ID, s.RunID, s.CandidateID, before.StoredFieldValue(s.Field), after.StoredFieldValue(s.Field), after.Version, Now(), s.Field, after.Version)
 	return id, err
 }
 func (r *Repository) Write(id string) (domain.Writeback, error) {
@@ -423,4 +442,11 @@ func (r *Repository) Audits(before float64, beforeID string, limit int) ([]domai
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// Advance only guards matching the exact pre-mutation version. An external edit
+// creates a gap, so earlier writebacks remain blocked rather than being rebased.
+func (r *Repository) AdvanceUndoGuards(id, before, after int) error {
+	_, err := r.Tx.Exec("UPDATE writebacks SET guard_version=? WHERE candidate_id=? AND guard_version=? AND state='applied'", after, id, before)
+	return err
 }

@@ -26,10 +26,11 @@ type OAuth struct {
 	DisablePKCE bool
 }
 type Token struct {
-	Access    string `json:"access_token"`
-	Refresh   string `json:"refresh_token"`
-	ExpiresIn int    `json:"expires_in"`
-	API       string `json:"api"`
+	Access      string `json:"access_token"`
+	Refresh     string `json:"refresh_token"`
+	ExpiresIn   int    `json:"expires_in"`
+	API         string `json:"api"`
+	APIReported bool   `json:"-"`
 }
 
 func (Token) String() string { return "JobAdder token [redacted]" }
@@ -122,6 +123,7 @@ func (o OAuth) token(ctx context.Context, form url.Values) (Token, error) {
 	if err != nil || len(body) > 1<<20 || json.Unmarshal(body, &token) != nil || token.Access == "" || token.ExpiresIn <= 0 {
 		return Token{}, domain.Invalid("JobAdder returned an invalid authorization response.")
 	}
+	token.APIReported = token.API != ""
 	if token.API == "" {
 		token.API = DefaultBase
 	}

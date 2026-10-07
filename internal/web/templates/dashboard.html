@@ -2,15 +2,15 @@
 <section class="page-heading">
 <div>
 <p class="eyebrow">A LITTLE LESS MANUAL WORK</p>
-<h1>Your Country workspace.</h1>
+<h1>Your profile workspace.</h1>
 <p class="intro">Find missing information, review the evidence, and keep every decision in one place.</p>
 </div>
 <div class="edition">
 <span class="workspace-illustration">{{template "icon-arrow"}}</span>
-<small>ONE FIELD.<br>A CLEAR START.</small>
+<small>FILL THE GAPS.<br>KEEP WHAT IS THERE.</small>
 </div>
 </section>
-{{if not .Runs}}<section class="welcome-guide" aria-label="Getting started"><div><span class="step-number">1</span><strong>Start with a preview</strong><p>See the gaps and proposed Country values.</p></div><div><span class="step-number">2</span><strong>Read the evidence</strong><p>Each proposal shows the original source.</p></div><div><span class="step-number">3</span><strong>Review when ready</strong><p>Approve changes individually. Undo is available.</p></div></section>{{end}}
+{{if not .Runs}}<section class="welcome-guide" aria-label="Getting started"><div><span class="step-number">1</span><strong>Start with a preview</strong><p>Choose fields and inspect proposed values.</p></div><div><span class="step-number">2</span><strong>Read the evidence</strong><p>Each proposal shows the original source.</p></div><div><span class="step-number">3</span><strong>Review when ready</strong><p>Approve changes individually. Undo is available.</p></div></section>{{end}}
 <section class="stats" aria-label="Country gap report">
 <article>
 <p>Profiles in this workspace</p>
@@ -42,21 +42,15 @@
 </div>
 <form action="/runs" method="post" class="run-form">
 <input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label class="field-choice">
-<input type="checkbox" name="fields" value="country" checked required>
-<span>
-<strong>Country</strong>
-<small>Fill only truly empty Country fields</small>
-</span>
-<span class="tag">Selected</span>
-</label>
+<fieldset class="run-fields"><legend>Fields to fill</legend>{{range .FieldCatalog}}{{if .EnabledForRuns}}<label class="field-choice"><input type="checkbox" name="fields" value="{{.Key}}" {{if eq .Key "country"}}checked{{end}}><span><strong>{{.Label}}</strong><small>Preserve existing values</small></span></label>{{end}}{{end}}</fieldset>
+<input type="hidden" name="protection" value="fill_blanks"><p class="hint"><strong>Fill blanks only.</strong> Every populated field is protected, including placeholders such as Unknown. The app checks again before approval.</p>
 <label for="mode">Run mode</label>
 <select name="mode" id="mode">
 <option value="preview">Preview · inspect proposals without changes</option>
 <option value="review">Review · approve each proposed change</option>
 </select>
 <p class="hint">Both modes scan the same profiles. Preview cannot approve changes; Review adds approval controls.</p>
-<button class="button primary" type="submit">Start Country run →</button>
+<button class="button primary" type="submit">Start selected-field run →</button>
 </form>
 </article>
 <aside class="assurance">
@@ -65,7 +59,7 @@
 <ol>
 <li>
 <strong>Only the field you choose.</strong>
-<span>This prototype handles Country.</span>
+<span>Choose one or more supported fields.</span>
 </li>
 <li>
 <strong>Only when it is empty.</strong>
@@ -105,7 +99,7 @@
 <tbody>{{range .Runs}}
 <tr>
 <td>
-<a class="run-link" href="/runs/{{.ID}}">Country · {{short .ID}}
+<a class="run-link" href="/runs/{{.ID}}">{{fieldLabels .Fields}} · {{short .ID}}
 </a>
 <small class="cell-sub">{{timestamp .CreatedAt}}
 </small>
@@ -129,6 +123,6 @@
 <div class="empty-state">
 <span class="empty-mark">{{template "icon-arrow"}}</span>
 <h3>Your first run starts here.</h3>
-<p>Choose Preview to see the gap report and Country proposals.</p>
+<p>Choose Preview to see the gap report and proposals.</p>
 </div>{{end}}
 </section>{{template "bottom" .}}{{end}}

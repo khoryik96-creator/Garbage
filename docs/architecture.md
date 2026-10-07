@@ -40,16 +40,17 @@ adapter needs its own policy and evaluation work before changing this behavior.
 
 ## Guarantees implemented now
 
-- Country-only Preview/Review requests reject unsupported fields and modes.
+- Selected-field Preview/Review requests reject unsupported fields and modes.
 - Preview never mutates a profile. Decisions require a completed Review run.
 - Empty means null or whitespace. Placeholder values are preserved.
 - Proposals quote source text verbatim; conflicts require a correction note.
-- Approval reserves suggestion state, checks fresh evidence and Country, and
+- Approval reserves suggestion state, checks fresh evidence and the target field, and
   conditionally updates the expected revision and exact original empty value.
 - Unselected fields are compared after a write. Any unexpected change rolls back
   the candidate, suggestion state, write record, and audit event together.
 - Approval and undo have one effect under concurrent submissions. Undo restores
-  the exact original empty value only while Country and revision remain unchanged.
+  the exact original empty value only while the target value matches and no outside revision change has occurred.
+  App writes advance matching undo guards without changing the recorded original revision.
 - Claims have tokens and expiring leases. Workers renew healthy claims during and
   between extraction requests; obsolete or expired owners cannot commit a page.
   Pause and cancel revoke ownership, and shutdown cancels active requests and

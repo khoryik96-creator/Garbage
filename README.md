@@ -1,20 +1,21 @@
 # Garbage Truck · JobAdder auto-coder
 
-A **Go core with a Python document/AI worker**, implementing the Country workflow
+A **Go core with a Python document/AI worker**, implementing the profile-filling workflow
 in [Claude's brief](IDEATION.md). Preview, review, persistent jobs, approvals, audit,
 and guarded undo run in Go. Python owns the document-processing boundary.
 
-This release uses **synthetic profiles only**. The document worker currently reads
-plain text with deterministic residence rules. JobAdder OAuth, PDF/OCR, vision,
-and LLM providers remain integration work; no credentials or paid model calls are needed.
+Selected-field runs use **synthetic profiles** and preserve every populated field.
+Settings supports JobAdder OAuth and read-only live profile browsing. The document
+worker reads plain text with deterministic residence rules; PDF/OCR, vision and LLM
+providers remain integration work. The demo needs no credentials or paid calls.
 
 ## Install the app
 
 Download a package from [Desktop preview 0.3.0](https://github.com/khoryik96-creator/Garbage/releases/tag/v0.3.0).
 
-The 0.4.1 fixes are built by [Desktop installers](https://github.com/khoryik96-creator/Garbage/actions/workflows/desktop-release.yml).
-Download the `desktop-windows` artifact for the reviewed 0.4.1 source revision to
-use the new Setup.exe. The existing 0.3.0 tag is preserved. See
+The 0.5.0 improvements are built by [Desktop installers](https://github.com/khoryik96-creator/Garbage/actions/workflows/desktop-release.yml).
+Download the `desktop-windows` artifact for the reviewed 0.5.0 source revision to
+use the new Setup.exe. See [fields and JobAdder setup](docs/fields-and-jobadder-0.5.0.md). The existing 0.3.0 tag is preserved. See
 [0.4.1 review fixes](docs/reliability-0.4.1.md) and [0.4.0 changes](docs/reliability-0.4.0.md) for the checks and limits.
 
 - **Windows 10/11, x64:** run `Garbage-Truck-0.3.0-windows-amd64-Setup.exe`, click
@@ -32,7 +33,7 @@ keep your saved data.
 Windows builds support optional Authenticode signing; the package's Signing.json
 reports the actual signature presence and Windows verification. Workspace settings
 also checks the installed executable with Windows. macOS builds are not notarized.
-Interactive JobAdder and AI connections remain integration work. See
+JobAdder live writes and AI providers remain integration work. See
 [installation and backups](docs/installation.md) for details and the portable option.
 
 ## Run from source

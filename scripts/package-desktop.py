@@ -291,7 +291,7 @@ def main() -> None:
     parser.add_argument("--platform", required=True, choices=["windows", "linux", "macos"])
     parser.add_argument("--arch", required=True, choices=["amd64", "arm64"])
     parser.add_argument("--binary", required=True, type=Path)
-    parser.add_argument("--version", default="0.4.1")
+    parser.add_argument("--version", default="0.5.0")
     parser.add_argument("--out", type=Path, default=ROOT / "dist")
     parser.add_argument("--makensis", default="makensis")
     parser.add_argument("--sign-windows", action="store_true")

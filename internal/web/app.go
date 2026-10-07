@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/khoryik96-creator/Garbage/internal/audit"
+	"github.com/khoryik96-creator/Garbage/internal/connectors/jobadder"
 	"github.com/khoryik96-creator/Garbage/internal/domain"
 	"github.com/khoryik96-creator/Garbage/internal/policy"
 	"github.com/khoryik96-creator/Garbage/internal/storage"
@@ -38,6 +39,7 @@ type App struct {
 
 // Options describes the host; installed and developer workspaces share the same UI.
 type Options struct {
+	JobAdder        *jobadder.Connection
 	Version         string
 	DatabasePath    string
 	DocumentWorker  bool
@@ -52,7 +54,13 @@ func New(s *storage.Store, embedded bool) (http.Handler, error) {
 	return NewWithOptions(s, embedded, Options{})
 }
 func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Handler, error) {
-	functions := template.FuncMap{"prefix": strings.HasPrefix, "short": func(s string) string { return s[:min(8, len(s))] }, "shortPointer": func(s *string) string {
+	functions := template.FuncMap{"fieldLabel": domain.FieldLabel, "fieldLabels": func(fields []string) string {
+		labels := []string{}
+		for _, f := range fields {
+			labels = append(labels, domain.FieldLabel(f))
+		}
+		return strings.Join(labels, ", ")
+	}, "prefix": strings.HasPrefix, "short": func(s string) string { return s[:min(8, len(s))] }, "shortPointer": func(s *string) string {
 		if s == nil {
 			return ""
 		}
@@ -113,6 +121,9 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 	mux.HandleFunc("GET /audit", a.auditPage)
 	mux.HandleFunc("GET /runs", a.runsPage)
 	mux.HandleFunc("GET /settings", a.settingsPage)
+	mux.HandleFunc("POST /jobadder/connect", a.connectJobAdder)
+	mux.HandleFunc("POST /jobadder/disconnect", a.disconnectJobAdder)
+	mux.HandleFunc("GET /jobadder/profiles", a.jobAdderProfiles)
 	mux.HandleFunc("POST /workspace/backup", a.backupWorkspace)
 	mux.HandleFunc("POST /workspace/restore", a.restoreWorkspace)
 	if options.DesktopInstance != "" && options.Shutdown != nil {
@@ -168,6 +179,9 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 func (a *App) secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		if r.URL.Path == "/settings" || r.URL.Path == "/jobadder/connect" {
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; form-action 'self' https://id.jobadder.com; frame-ancestors 'none'; base-uri 'none'")
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "same-origin")
@@ -319,6 +333,11 @@ func (a *App) render(w http.ResponseWriter, r *http.Request, name string, data m
 	data["CSRF"] = token
 	data["Path"] = r.URL.Path
 	data["Countries"] = policy.Countries
+	catalog, _ := domain.Catalog()
+	data["FieldCatalog"] = catalog.Fields
+	if a.Options.JobAdder != nil {
+		data["Connection"] = a.Options.JobAdder.Status()
+	}
 	data["Desktop"] = a.Options.DesktopInstance != "" && a.Options.Shutdown != nil
 	data["Version"] = a.Options.Version
 	data["SigningStatus"] = a.Options.SigningStatus
@@ -423,9 +442,10 @@ func (a *App) newRun(w http.ResponseWriter, r *http.Request) {
 	if api(r) {
 		err = decode(r, &request)
 	} else {
-		err = formKeys(r, "mode", "fields")
+		err = formKeys(r, "mode", "fields", "protection")
 		request.Mode = r.PostForm.Get("mode")
 		request.Fields = r.PostForm["fields"]
+		request.Protection = r.PostForm.Get("protection")
 	}
 	if err == nil {
 		err = request.Validate()

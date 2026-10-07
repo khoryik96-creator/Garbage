@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -33,7 +34,7 @@ func (service *Review) Approve(id string, a domain.Approval) (domain.ReviewResul
 		if err != nil {
 			return err
 		}
-		if run.Mode != "review" || run.State != "completed" || len(run.Fields) != 1 || run.Fields[0] != "country" {
+		if run.Mode != "review" || run.State != "completed" || !slices.Contains(run.Fields, s.Field) {
 			return domain.ErrConflict
 		}
 		raw := ""
@@ -42,12 +43,12 @@ func (service *Review) Approve(id string, a domain.Approval) (domain.ReviewResul
 		} else if s.Value != nil {
 			raw = *s.Value
 		}
-		value := policy.Normalize(raw)
-		if value == "" {
-			return domain.Invalid("Choose a valid country before approving.")
+		value, err := policy.FieldValue(s.Field, raw)
+		if err != nil {
+			return err
 		}
 		if (s.Value == nil || value != *s.Value) && strings.TrimSpace(a.Reason) == "" {
-			return domain.Invalid("Explain the country correction so it can be audited.")
+			return domain.Invalid("Explain the correction so it can be audited.")
 		}
 		if err = r.SuggestionState(id, "pending", "applied"); err != nil {
 			return err
@@ -64,20 +65,30 @@ func (service *Review) Approve(id string, a domain.Approval) (domain.ReviewResul
 			result.State = "skipped"
 			return r.Audit("approval_skipped", &run.ID, &before.ID, map[string]any{"reason": reason})
 		}
-		if !domain.Empty(before.Country) {
-			return skip("Country was already filled.")
+		if !domain.Empty(before.FieldValue(s.Field)) {
+			return skip("The field was already filled.")
 		}
-		if err = policy.ValidateEvidence(before, domain.Extraction{Value: s.Value, Confidence: s.Confidence, Evidence: s.Evidence, Reason: s.Reason}); err != nil {
+
+		if err = policy.ValidateFieldEvidence(before, s.Field, domain.Extraction{Value: s.Value, Confidence: s.Confidence, Evidence: s.Evidence, Reason: s.Reason}); err != nil {
 			return err
 		}
-		fresh, err := (pipeline.RuleCountryExtractor{}).ExtractCountry(context.Background(), before)
+		fresh, err := pipeline.ExtractField(context.Background(), before, s.Field)
 		if err != nil {
 			return err
 		}
 		if fresh == nil || !reflect.DeepEqual(fresh.Value, s.Value) {
-			return domain.Invalid("Residence evidence changed. Start a new review run.")
+			return domain.Invalid("Source evidence changed. Start a new review run.")
 		}
-		mutation, err := gateway.FillCountry(before, value)
+		var mutation domain.Mutation
+		if s.Field == "country" {
+			mutation, err = gateway.FillCountry(before, value)
+		} else {
+			fields, ok := gateway.(domain.FieldGateway)
+			if !ok {
+				return domain.Invalid("This adapter cannot update the selected field.")
+			}
+			mutation, err = fields.FillField(before, s.Field, value)
+		}
 		if err != nil {
 			return err
 		}
@@ -86,9 +97,9 @@ func (service *Review) Approve(id string, a domain.Approval) (domain.ReviewResul
 		}
 		after := mutation.Candidate
 		comparison := after
-		comparison.Country = before.Country
+		resetField(&comparison, before, s.Field)
 		comparison.Version = before.Version
-		if !reflect.DeepEqual(comparison, before) || after.Country == nil || *after.Country != value {
+		if !reflect.DeepEqual(comparison, before) || after.FieldValue(s.Field) == nil || *after.FieldValue(s.Field) != value {
 			return domain.Invalid("Unexpected field changes. Approval was rolled back.")
 		}
 		writeID, err := r.RecordWrite(s, before, after)
@@ -96,7 +107,11 @@ func (service *Review) Approve(id string, a domain.Approval) (domain.ReviewResul
 			return err
 		}
 		result = domain.ReviewResult{State: "applied", WritebackID: &writeID}
-		return r.Audit("country_approved", &run.ID, &before.ID, map[string]any{"field": "country", "before": before.Country, "after": value, "writeback_id": writeID, "reason": a.Reason, "actor": "local reviewer"})
+		action := "field_approved"
+		if s.Field == "country" {
+			action = "country_approved"
+		}
+		return r.Audit(action, &run.ID, &before.ID, map[string]any{"field": s.Field, "before": before.FieldValue(s.Field), "after": value, "writeback_id": writeID, "reason": a.Reason, "actor": "local reviewer"})
 	})
 	return result, err
 }
@@ -116,7 +131,11 @@ func (service *Review) Reject(id string) error {
 		if err = r.SuggestionState(id, "pending", "rejected"); err != nil {
 			return err
 		}
-		return r.Audit("country_rejected", &run.ID, &s.CandidateID, nil)
+		action := "field_rejected"
+		if s.Field == "country" {
+			action = "country_rejected"
+		}
+		return r.Audit(action, &run.ID, &s.CandidateID, map[string]any{"field": s.Field})
 	})
 }
 func (service *Review) Undo(id string) (string, error) {
@@ -138,17 +157,29 @@ func (service *Review) Undo(id string) (string, error) {
 			return err
 		}
 		state = "undo_skipped"
-		if current.Country != nil && *current.Country == write.AfterValue && current.Version == write.AfterVersion {
-			m, err := gateway.ClearCountry(current, write.AfterValue, write.BeforeValue)
+		if current.FieldValue(write.Field) != nil && *current.FieldValue(write.Field) == write.AfterValue && current.Version == write.GuardVersion {
+			var m domain.Mutation
+			if write.Field == "country" {
+				m, err = gateway.ClearCountry(current, write.AfterValue, write.BeforeValue)
+			} else {
+				fields, ok := gateway.(domain.FieldGateway)
+				if !ok {
+					return domain.Invalid("This adapter cannot undo the selected field.")
+				}
+				m, err = fields.ClearField(current, write.Field, write.AfterValue, write.BeforeValue)
+			}
 			if err != nil {
 				return err
 			}
 			if m.Applied {
 				comparison := m.Candidate
-				comparison.Country = current.Country
+				resetField(&comparison, current, write.Field)
 				comparison.Version = current.Version
-				if !reflect.DeepEqual(comparison, current) || !reflect.DeepEqual(m.Candidate.Country, write.BeforeValue) {
+				if !reflect.DeepEqual(comparison, current) || !reflect.DeepEqual(m.Candidate.StoredFieldValue(write.Field), write.BeforeValue) {
 					return domain.Invalid("Unexpected changes during undo. Rolled back.")
+				}
+				if err = r.AdvanceUndoGuards(current.ID, current.Version, m.Candidate.Version); err != nil {
+					return err
 				}
 				state = "undone"
 			}
@@ -156,7 +187,28 @@ func (service *Review) Undo(id string) (string, error) {
 		if err = r.WriteState(id, state); err != nil {
 			return err
 		}
-		return r.Audit("country_undo", &write.RunID, &write.CandidateID, map[string]any{"writeback_id": id, "state": state})
+		action := "field_undo"
+		if write.Field == "country" {
+			action = "country_undo"
+		}
+		return r.Audit(action, &write.RunID, &write.CandidateID, map[string]any{"field": write.Field, "writeback_id": id, "state": state})
 	})
 	return state, err
+}
+
+func resetField(candidate *domain.Candidate, original domain.Candidate, field string) {
+	if field == "country" {
+		candidate.Country = original.Country
+		return
+	}
+	fields := map[string]string{}
+	for k, v := range candidate.OtherFields {
+		fields[k] = v
+	}
+	if v, ok := original.OtherFields[field]; ok {
+		fields[field] = v
+	} else {
+		delete(fields, field)
+	}
+	candidate.OtherFields = fields
 }

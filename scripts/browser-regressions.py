@@ -3,6 +3,8 @@
 import argparse
 import json
 import os
+import re
+import socket
 import subprocess
 import tempfile
 import time
@@ -77,7 +79,7 @@ def check(binary: Path, executable: str | None, artifacts: Path | None) -> None:
 
                 page.set_viewport_size({"width": 1440, "height": 900})
                 page.goto(base)
-                page.get_by_role("button", name="Start Country run").click()
+                page.get_by_role("button", name="Start selected-field run").click()
                 expect(page.locator('[data-run-state="completed"]')).to_be_attached(timeout=15000)
                 expect(page.get_by_role("button", name="Approve Country")).to_have_count(0)
                 page.get_by_role("button", name="Start a Review run").click()
@@ -105,6 +107,72 @@ def check(binary: Path, executable: str | None, artifacts: Path | None) -> None:
                 if artifacts:
                     artifacts.mkdir(parents=True, exist_ok=True)
                     page.screenshot(path=str(artifacts / "review.png"), full_page=True)
+                page.goto(base)
+                for field in ["email", "mobile", "current_employer"]:
+                    page.locator(f'input[name="fields"][value="{field}"]').check()
+                page.get_by_label("Run mode").select_option("review")
+                page.get_by_role("button", name="Start selected-field run").click()
+                expect(page.locator('[data-run-state="completed"]')).to_be_attached(timeout=15000)
+                alex_mobile = (
+                    page.locator("article.suggestion")
+                    .filter(has_text="Demo Alex Morgan")
+                    .filter(has=page.get_by_role("button", name="Approve Mobile"))
+                )
+                expect(alex_mobile).to_have_count(1)
+                expect(
+                    page.locator("article.suggestion")
+                    .filter(has_text="Demo Alex Morgan")
+                    .filter(has=page.get_by_role("button", name="Approve Email"))
+                ).to_have_count(0)
+                alex_mobile.get_by_role("button", name="Approve Mobile").click()
+                expect(page.get_by_role("button", name="Undo", exact=True)).to_have_count(1)
+                page.get_by_role("button", name="Undo", exact=True).click()
+                page.goto(base + "settings")
+                expect(page.get_by_label("Client ID", exact=True)).to_be_visible()
+                expect(page.get_by_label("Client Secret", exact=True)).to_have_attribute(
+                    "type", "password"
+                )
+                page.get_by_label("Client ID", exact=True).fill("invalid-test-client")
+                page.get_by_label("Client Secret", exact=True).fill("test-secret-must-never-return")
+                page.get_by_label("Registered callback URL").fill(
+                    "https://example.invalid/callback"
+                )
+                page.get_by_role("button", name="Connect JobAdder", exact=True).click()
+                assert "test-secret-must-never-return" not in page.content()
+                page.goto(base + "settings")
+                expect(page.get_by_label("Client Secret", exact=True)).to_have_value("")
+                with socket.socket() as callback_port:
+                    callback_port.bind(("127.0.0.1", 0))
+                    callback = (
+                        f"http://127.0.0.1:{callback_port.getsockname()[1]}/jobadder/callback"
+                    )
+                page.route(
+                    "https://id.jobadder.com/**",
+                    lambda route: route.fulfill(
+                        status=200,
+                        content_type="text/html",
+                        body="<h1>JobAdder sign-in fixture</h1>",
+                    ),
+                )
+                page.get_by_label("Client ID", exact=True).fill("test-client")
+                page.get_by_label("Client Secret", exact=True).fill("test-secret-must-never-return")
+                page.get_by_label("Registered callback URL").fill(callback)
+                page.get_by_label("Remember this connection securely on this computer").uncheck()
+                page.get_by_role("button", name="Connect JobAdder", exact=True).click()
+                expect(page).to_have_url(
+                    re.compile(r"https://id\.jobadder\.com/connect/authorize\?.*")
+                )
+                expect(page.get_by_role("heading", name="JobAdder sign-in fixture")).to_be_visible()
+                assert "test-secret-must-never-return" not in page.url
+                page.goto(base + "settings")
+                expect(page.get_by_label("Client Secret", exact=True)).to_have_value("")
+                page.get_by_role("button", name="Disconnect and remove saved details").click()
+                if artifacts:
+                    page.screenshot(path=str(artifacts / "settings.png"), full_page=True)
+                print(
+                    "Multiple field selection, protected email, mobile approval/undo "
+                    "and OAuth settings passed."
+                )
                 assert not errors, errors
                 page.locator(".app-sidebar").get_by_role(
                     "button", name="Quit Garbage Truck"

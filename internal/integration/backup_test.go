@@ -134,7 +134,7 @@ func TestInvalidRestoreAndCancelledBackupKeepCurrentData(t *testing.T) {
 				must(t, s.Backup(context.Background(), path))
 				db, err := sql.Open("sqlite3", path)
 				must(t, err)
-				query := map[string]string{"version": "UPDATE schema_migrations SET version=99", "trigger": "CREATE TRIGGER unsafe AFTER INSERT ON runs BEGIN DELETE FROM demo_candidates; END", "orphan": "UPDATE suggestions SET candidate_id=candidate_id+999999"}[kind]
+				query := map[string]string{"version": "UPDATE schema_migrations SET version=99 WHERE version=(SELECT MAX(version) FROM schema_migrations)", "trigger": "CREATE TRIGGER unsafe AFTER INSERT ON runs BEGIN DELETE FROM demo_candidates; END", "orphan": "UPDATE suggestions SET candidate_id=candidate_id+999999"}[kind]
 				_, err = db.Exec(query)
 				must(t, err)
 				must(t, db.Close())

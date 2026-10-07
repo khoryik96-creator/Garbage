@@ -3,7 +3,7 @@
 This prototype uses [Kano](https://github.com/khoryik96-creator/Kano) as a source
 reference at commit [`58c857dad907cf73c0e3281ba449e142ce81b9c9`](https://github.com/khoryik96-creator/Kano/tree/58c857dad907cf73c0e3281ba449e142ce81b9c9).
 The reference supplies field names and integration lessons. It does not establish
-the public API's write contract or enable a live connection in Garbage Truck.
+the public API's write contract or enable live writes in Garbage Truck.
 
 ## Two distinct API contracts
 
@@ -34,7 +34,9 @@ copied from Kano. Its source checkout is a reference outside the project checkou
 20 observed fields, their source files, notes, and account-specific status. The
 read-only `/api/fields` endpoint exposes this metadata, including the source commit.
 `public_v2_mapping_verified` is false for every field. `enabled_for_runs` is true
-only for Country, whose current implementation still uses synthetic profiles.
+for ten local fields in version 0.5.0, whose run implementation uses synthetic profiles.
+Settings now provides OAuth sign-in and read-only public profile browsing. See
+[connection setup](fields-and-jobadder-0.5.0.md).
 
 | Field group | Browser-record shape observed in Kano |
 |---|---|

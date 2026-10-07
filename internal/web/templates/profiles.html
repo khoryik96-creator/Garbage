@@ -2,8 +2,8 @@
 <section class="compact-heading">
 <div>
 <p class="eyebrow">SOURCE RECORDS</p>
-<h1>The demo profiles.</h1>
-<p class="intro">Synthetic records covering empty fields, existing values, missing evidence, and conflicting sources.</p>
+<h1>{{if .Live}}Your JobAdder profiles.{{else}}The demo profiles.{{end}}</h1>
+<p class="intro">{{if .Live}}{{.LiveTotal}} profiles in your connected account. Read-only: existing information is protected.{{else}}Synthetic records covering empty fields, existing values, missing evidence, and conflicting sources.{{end}}</p>
 </div>
 </section>
 <section class="card">
@@ -15,7 +15,7 @@
 <th>Profile</th>
 <th>Current Country</th>
 <th>Address country</th>
-<th>Notes</th>
+<th>Email</th><th>Mobile</th><th>Current employer</th><th>Notes</th>
 </tr>
 </thead>
 <tbody>{{range .Page.Candidates}}
@@ -30,12 +30,12 @@
 </td>
 <td>{{emptyValue .AddressCountry}}
 </td>
-<td class="notes-cell">{{.Notes}}
+<td>{{emptyValue (.FieldValue "email")}}</td><td>{{emptyValue (.FieldValue "mobile")}}</td><td>{{emptyValue (.FieldValue "current_employer")}}</td><td class="notes-cell">{{.Notes}}
 </td>
 </tr>{{end}}
 </tbody>
 </table>
 </div>
 <div class="empty-state" data-profile-empty hidden><h3>No matching profiles on this page.</h3><p>Try a different name, profile number, or country.</p></div>
-</section>{{if not .Page.Finished}}
+</section>{{if .LiveNext}}<a class="button secondary" href="/jobadder/profiles?next={{.LiveNext}}">Next JobAdder profiles →</a>{{end}}{{if not .Page.Finished}}
 <a class="button secondary" href="/profiles?after={{.Page.Cursor}}">Next profiles →</a>{{end}}{{template "bottom" .}}{{end}}
