@@ -13,9 +13,9 @@ providers remain integration work. The demo needs no credentials or paid calls.
 
 Download a package from [Desktop preview 0.3.0](https://github.com/khoryik96-creator/Garbage/releases/tag/v0.3.0).
 
-The 0.5.0 improvements are built by [Desktop installers](https://github.com/khoryik96-creator/Garbage/actions/workflows/desktop-release.yml).
-Download the `desktop-windows` artifact for the reviewed 0.5.0 source revision to
-use the new Setup.exe. See [fields and JobAdder setup](docs/fields-and-jobadder-0.5.0.md). The existing 0.3.0 tag is preserved. See
+The 0.5.1 improvements are built by [Desktop installers](https://github.com/khoryik96-creator/Garbage/actions/workflows/desktop-release.yml).
+Download the `desktop-windows` artifact for the reviewed 0.5.1 source revision to
+use the new Setup.exe. See [fields and JobAdder setup](docs/fields-and-jobadder-0.5.0.md) and [connection fixes](docs/jobadder-0.5.1.md). The existing 0.3.0 tag is preserved. See
 [0.4.1 review fixes](docs/reliability-0.4.1.md) and [0.4.0 changes](docs/reliability-0.4.0.md) for the checks and limits.
 
 - **Windows 10/11, x64:** run `Garbage-Truck-0.3.0-windows-amd64-Setup.exe`, click

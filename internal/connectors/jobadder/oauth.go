@@ -59,16 +59,20 @@ func (o OAuth) AuthorizationURL(state, verifier string) (string, error) {
 func (o OAuth) CodeFromRedirect(raw, expectedState string) (string, error) {
 	u, err := url.Parse(raw)
 	registered, registeredErr := url.Parse(o.RedirectURI)
-	if err != nil || registeredErr != nil || u.Scheme != registered.Scheme || u.Host != registered.Host || u.Path != registered.Path || u.User != nil || u.Fragment != "" || len(expectedState) < 32 || len(u.Query()["state"]) != 1 || u.Query().Get("state") != expectedState {
+	if err != nil || registeredErr != nil {
 		return "", domain.Invalid("JobAdder sign-in did not match this authorization request.")
 	}
-	if u.Query().Get("error") != "" {
+	query, queryErr := url.ParseQuery(u.RawQuery)
+	if queryErr != nil || u.Scheme != registered.Scheme || u.Host != registered.Host || u.Path != registered.Path || u.User != nil || u.Fragment != "" || len(expectedState) < 32 || len(query["state"]) != 1 || query.Get("state") != expectedState {
+		return "", domain.Invalid("JobAdder sign-in did not match this authorization request.")
+	}
+	if len(query["error"]) > 0 {
 		return "", domain.Invalid("JobAdder denied the sign-in request.")
 	}
-	if len(u.Query()["code"]) != 1 || u.Query().Get("code") == "" {
+	if len(query["code"]) != 1 || query.Get("code") == "" {
 		return "", domain.Invalid("JobAdder did not return an authorization code.")
 	}
-	return u.Query().Get("code"), nil
+	return query.Get("code"), nil
 }
 
 func (o OAuth) Exchange(ctx context.Context, code, verifier string) (Token, error) {

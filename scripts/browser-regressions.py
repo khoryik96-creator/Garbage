@@ -11,6 +11,7 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -142,6 +143,26 @@ def check(binary: Path, executable: str | None, artifacts: Path | None) -> None:
                 assert "test-secret-must-never-return" not in page.content()
                 page.goto(base + "settings")
                 expect(page.get_by_label("Client Secret", exact=True)).to_have_value("")
+                with socket.socket() as occupied:
+                    occupied.bind(("127.0.0.1", 0))
+                    occupied.listen(1)
+                    page.get_by_label("Client ID", exact=True).fill("test-client")
+                    page.get_by_label("Client Secret", exact=True).fill(
+                        "test-secret-must-never-return"
+                    )
+                    page.get_by_label("Registered callback URL").fill(
+                        f"http://127.0.0.1:{occupied.getsockname()[1]}/jobadder/callback"
+                    )
+                    page.get_by_label(
+                        "Remember this connection securely on this computer"
+                    ).uncheck()
+                    page.get_by_role("button", name="Connect JobAdder", exact=True).click()
+                    expect(
+                        page.get_by_text(re.compile("The callback port is in use"))
+                    ).to_be_visible()
+                    assert "test-secret-must-never-return" not in page.content()
+                    page.get_by_role("link", name="Return to Settings", exact=True).click()
+                    expect(page.get_by_label("Client ID", exact=True)).to_have_value("")
                 with socket.socket() as callback_port:
                     callback_port.bind(("127.0.0.1", 0))
                     callback = (
@@ -191,16 +212,38 @@ def check(binary: Path, executable: str | None, artifacts: Path | None) -> None:
                     == 1
                 )
                 assert "test-secret-must-never-return" not in page.url
+                state = parse_qs(urlparse(page.url).query)["state"][0]
+                identity.send("Fetch.disable")
+                page.goto(callback + "?state=" + state + "&error=access_denied")
+                expect(page).to_have_url(base + "settings?jobadder=failed")
+                expect(
+                    page.get_by_text(re.compile("JobAdder sign-in was cancelled or denied"))
+                ).to_be_visible()
+                identity.send(
+                    "Fetch.enable",
+                    {
+                        "patterns": [
+                            {"urlPattern": "https://id.jobadder.com/*", "requestStage": "Request"}
+                        ]
+                    },
+                )
+                page.get_by_role("button", name="Connect JobAdder", exact=True).click()
+                expect(page.get_by_role("heading", name="JobAdder sign-in fixture")).to_be_visible()
                 identity.send("Fetch.disable")
                 identity.detach()
                 page.goto(base + "settings")
                 expect(page.get_by_label("Client Secret", exact=True)).to_have_value("")
+                expect(page.get_by_text(re.compile("Waiting for JobAdder sign-in"))).to_be_visible()
+                page.get_by_role("button", name="Cancel sign-in", exact=True).click()
+                expect(page.get_by_text(re.compile("Waiting for JobAdder sign-in"))).to_have_count(
+                    0
+                )
                 page.get_by_role("button", name="Disconnect and remove saved details").click()
                 if artifacts:
                     page.screenshot(path=str(artifacts / "settings.png"), full_page=True)
                 print(
                     "Multiple field selection, protected email, mobile approval/undo "
-                    "and OAuth settings passed."
+                    "and OAuth settings, occupied port, denied sign-in, retry and cancel passed."
                 )
                 assert not errors, errors
                 page.locator(".app-sidebar").get_by_role(

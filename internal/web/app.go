@@ -73,7 +73,15 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 		return strings.Join(words, " ")
 	}, "timestamp": func(v float64) string {
 		return time.Unix(int64(v), 0).In(time.FixedZone("MYT", 8*3600)).Format("02 Jan 2006 · 15:04 MYT")
-	}, "country": policy.Name, "countryCode": func(v string) string { return policy.Name(&v) }, "emptyValue": func(v *string) string {
+	}, "country": policy.Name, "countryCode": func(v string) string { return policy.Name(&v) }, "liveValue": func(v *string) string {
+		if v == nil {
+			return "Not returned"
+		}
+		if domain.Empty(v) {
+			return "Empty"
+		}
+		return *v
+	}, "emptyValue": func(v *string) string {
 		if domain.Empty(v) {
 			return "Empty"
 		}
@@ -122,6 +130,7 @@ func NewWithOptions(s *storage.Store, embedded bool, options Options) (http.Hand
 	mux.HandleFunc("GET /runs", a.runsPage)
 	mux.HandleFunc("GET /settings", a.settingsPage)
 	mux.HandleFunc("POST /jobadder/connect", a.connectJobAdder)
+	mux.HandleFunc("POST /jobadder/cancel", a.cancelJobAdder)
 	mux.HandleFunc("POST /jobadder/disconnect", a.disconnectJobAdder)
 	mux.HandleFunc("GET /jobadder/profiles", a.jobAdderProfiles)
 	mux.HandleFunc("POST /workspace/backup", a.backupWorkspace)

@@ -3,5 +3,5 @@
 <h1>Unable to complete this action.</h1>
 <p>{{.Message}}
 </p>
-<a class="button secondary" href="/">Back to workspace</a>
+{{if prefix .Path "/jobadder/"}}<a class="button secondary" href="/settings">Return to Settings</a>{{else}}<a class="button secondary" href="/">Back to workspace</a>{{end}}
 </section>{{template "bottom" .}}{{end}}

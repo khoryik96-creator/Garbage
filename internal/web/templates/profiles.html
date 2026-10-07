@@ -6,6 +6,7 @@
 <p class="intro">{{if .Live}}{{.LiveTotal}} profiles in your connected account. Read-only: existing information is protected.{{else}}Synthetic records covering empty fields, existing values, missing evidence, and conflicting sources.{{end}}</p>
 </div>
 </section>
+{{if .Live}}<p class="notice">This page shows the candidate summaries returned by JobAdder. Detail-only fields such as employment and notes are not assessed here. Fields marked Not returned are not treated as empty. Filling runs still use the separate demo workspace.</p>{{end}}
 <section class="card">
 <div class="profile-toolbar"><h2>Candidate records</h2><label><span class="sr-only">Search profiles on this page</span><input type="search" placeholder="Search profiles on this page…" data-profile-search></label></div>
 <div class="table-wrap">
@@ -14,8 +15,8 @@
 <tr>
 <th>Profile</th>
 <th>Current Country</th>
-<th>Address country</th>
-<th>Email</th><th>Mobile</th><th>Current employer</th><th>Notes</th>
+<th>{{if .Live}}Country code{{else}}Address country{{end}}</th>
+<th>Email</th><th>Mobile</th>{{if .Live}}<th>Phone</th><th>State</th>{{else}}<th>Current employer</th><th>Notes</th>{{end}}
 </tr>
 </thead>
 <tbody>{{range .Page.Candidates}}
@@ -26,12 +27,11 @@
 <small class="cell-sub">#{{.ID}}
 </small>
 </td>
-<td>{{country .Country}}
+<td>{{if and $.Live (not .Country)}}Not returned{{else}}{{country .Country}}{{end}}
 </td>
-<td>{{emptyValue .AddressCountry}}
+<td>{{if $.Live}}{{liveValue .AddressCountry}}{{else}}{{emptyValue .AddressCountry}}{{end}}
 </td>
-<td>{{emptyValue (.FieldValue "email")}}</td><td>{{emptyValue (.FieldValue "mobile")}}</td><td>{{emptyValue (.FieldValue "current_employer")}}</td><td class="notes-cell">{{.Notes}}
-</td>
+{{if $.Live}}<td>{{liveValue (.FieldValue "email")}}</td><td>{{liveValue (.FieldValue "mobile")}}</td><td>{{liveValue (.FieldValue "phone")}}</td><td>{{liveValue (.FieldValue "state")}}</td>{{else}}<td>{{emptyValue (.FieldValue "email")}}</td><td>{{emptyValue (.FieldValue "mobile")}}</td><td>{{emptyValue (.FieldValue "current_employer")}}</td><td class="notes-cell">{{.Notes}}</td>{{end}}
 </tr>{{end}}
 </tbody>
 </table>

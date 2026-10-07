@@ -30,12 +30,15 @@ type credentialRecord struct {
 	ExpiresAt time.Time
 }
 type ConnectionStatus struct {
-	Configured, Connected, Remember, SecureStorage, PKCE, Saved bool
-	ClientID, RedirectURI, Error                                string
+	Configured, Connected, Remember, SecureStorage, PKCE, Saved, Pending bool
+	ClientID, RedirectURI, Error                                         string
 }
 type authorization struct {
 	state, verifier, browser, returnBase string
 	expires                              time.Time
+	exchanging                           bool
+	cancel                               context.CancelFunc
+	server                               *http.Server
 }
 type Connection struct {
 	mu      sync.Mutex
@@ -87,7 +90,7 @@ func (c *Connection) Status() ConnectionStatus {
 	if redirect == "" {
 		redirect = DefaultRedirect
 	}
-	return ConnectionStatus{Saved: c.saved, Configured: r.ClientID != "", Connected: r.Token.Access != "" && (time.Now().Before(r.ExpiresAt) || r.Token.Refresh != ""), Remember: r.Remember, SecureStorage: c.vault.Available(), PKCE: r.PKCE, ClientID: r.ClientID, RedirectURI: redirect, Error: c.failure}
+	return ConnectionStatus{Pending: c.pending != nil && time.Now().Before(c.pending.expires), Saved: c.saved, Configured: r.ClientID != "", Connected: r.Token.Access != "" && (time.Now().Before(r.ExpiresAt) || r.Token.Refresh != ""), Remember: r.Remember, SecureStorage: c.vault.Available(), PKCE: r.PKCE, ClientID: r.ClientID, RedirectURI: redirect, Error: c.failure}
 }
 func (c *Connection) persist(record credentialRecord) error {
 	if !record.Remember {
@@ -129,11 +132,7 @@ func (c *Connection) Configure(cfg Configuration) error {
 	}
 	c.dirty = false
 	c.failure = ""
-	c.pending = nil
-	if c.server != nil {
-		c.server.Close()
-		c.server = nil
-	}
+	c.cancelSignInLocked()
 	return nil
 }
 func (c *Connection) oauth() OAuth {
@@ -142,6 +141,52 @@ func (c *Connection) oauth() OAuth {
 func (c *Connection) Start(returnBase, browser string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.startLocked(returnBase, browser)
+}
+
+// Connect starts a new authorization without discarding a working connection
+// when the callback listener or protected storage cannot be prepared.
+func (c *Connection) Connect(cfg Configuration, returnBase, browser string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cfg.ClientID = strings.TrimSpace(cfg.ClientID)
+	cfg.RedirectURI = strings.TrimSpace(cfg.RedirectURI)
+	if cfg.ClientSecret == "" && cfg.ClientID == c.record.ClientID {
+		cfg.ClientSecret = c.record.ClientSecret
+	}
+	if err := validateConfiguration(cfg); err != nil {
+		return "", err
+	}
+	old, saved, dirty, failure := c.record, c.saved, c.dirty, c.failure
+	record := credentialRecord{Configuration: cfg}
+	if cfg.ClientID == old.ClientID && cfg.ClientSecret == old.ClientSecret {
+		record.Token, record.ExpiresAt = old.Token, old.ExpiresAt
+	}
+	c.record = record
+	address, err := c.startLocked(returnBase, browser)
+	if err == nil {
+		err = c.persist(record)
+		if err == nil && !cfg.Remember && saved {
+			if c.vault.Delete() != nil {
+				err = domain.Invalid("The saved credentials could not be removed. Unlock your keyring and retry.")
+			}
+		}
+		if err != nil {
+			c.cancelSignInLocked()
+		}
+	}
+	if err != nil {
+		c.record, c.saved, c.dirty, c.failure = old, saved, dirty, failure
+		return "", err
+	}
+	if !cfg.Remember {
+		c.saved = false
+	}
+	c.dirty, c.failure = false, ""
+	return address, nil
+}
+
+func (c *Connection) startLocked(returnBase, browser string) (string, error) {
 	if err := validateConfiguration(c.record.Configuration); err != nil {
 		return "", err
 	}
@@ -152,14 +197,11 @@ func (c *Connection) Start(returnBase, browser string) (string, error) {
 	if err != nil || base.Scheme != "http" || (base.Hostname() != "127.0.0.1" && base.Hostname() != "localhost") || base.User != nil || base.RawQuery != "" || base.Fragment != "" || base.Path != "" {
 		return "", domain.Invalid("Open Settings from the local app to connect.")
 	}
-	if c.server != nil {
-		c.server.Close()
-		c.server = nil
-	}
 	callback, _ := url.Parse(c.record.RedirectURI)
 	if callback.Hostname() != base.Hostname() {
 		return "", domain.Invalid("Use the same loopback hostname in Settings and the registered callback URL (127.0.0.1 or localhost).")
 	}
+	c.cancelSignInLocked()
 	listener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", callback.Port()))
 	if err != nil {
 		return "", domain.Invalid("The callback port is in use. Close another connection attempt or choose a different registered callback port.")
@@ -182,6 +224,7 @@ func (c *Connection) Start(returnBase, browser string) (string, error) {
 	pending := &authorization{state: state, verifier: verifier, browser: browser, returnBase: returnBase, expires: time.Now().Add(10 * time.Minute)}
 	c.pending = pending
 	server := &http.Server{Handler: http.HandlerFunc(c.callback), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second}
+	pending.server = server
 	c.server = server
 	go server.Serve(listener)
 	go func() {
@@ -195,11 +238,8 @@ func (c *Connection) Start(returnBase, browser string) (string, error) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.pending == pending {
-			c.pending = nil
-			server.Close()
-			if c.server == server {
-				c.server = nil
-			}
+			c.failure = "JobAdder sign-in expired. Start a new attempt from Settings."
+			c.cancelSignInLocked()
 		}
 	}()
 	return address, nil
@@ -213,21 +253,38 @@ func (c *Connection) callback(w http.ResponseWriter, r *http.Request) {
 	pending := c.pending
 	cookie, err := r.Cookie("gt_jobadder_flow")
 	registered, _ := url.Parse(c.record.RedirectURI)
-	if pending == nil || time.Now().After(pending.expires) || r.Method != "GET" || registered == nil || r.Host != registered.Host || r.URL.Path != registered.Path || err != nil || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(pending.browser)) != 1 {
+	if pending == nil || pending.exchanging || time.Now().After(pending.expires) || r.Method != "GET" || registered == nil || r.Host != registered.Host || r.URL.Path != registered.Path || err != nil || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(pending.browser)) != 1 {
 		http.Error(w, "This sign-in attempt is invalid or expired. Start again from Settings.", 403)
 		return
 	}
 	code, err := c.oauth().CodeFromRedirect(c.record.RedirectURI+"?"+r.URL.RawQuery, pending.state)
 	if err != nil {
+		query, parseErr := url.ParseQuery(r.URL.RawQuery)
+		if parseErr == nil && len(query["state"]) == 1 && query.Get("state") == pending.state && len(query["error"]) == 1 && query.Get("error") != "" && len(query["code"]) == 0 {
+			c.pending = nil
+			c.failure = "JobAdder sign-in was cancelled or denied. You can try again from Settings."
+			c.finishAuthorization(w, r, pending, "failed")
+			return
+		}
 		http.Error(w, err.Error(), 403)
 		return
 	}
-	c.pending = nil
 	ctx, cancel := context.WithTimeout(c.ctx, 20*time.Second)
 	defer cancel()
 	stop := context.AfterFunc(r.Context(), cancel)
 	defer stop()
-	token, err := c.oauth().Exchange(ctx, code, pending.verifier)
+	pending.exchanging, pending.cancel = true, cancel
+	oauth := c.oauth()
+	c.mu.Unlock()
+	token, err := oauth.Exchange(ctx, code, pending.verifier)
+	c.mu.Lock()
+	if c.pending != pending {
+		// A cancelled or superseded request cannot replace the account or close
+		// the listener belonging to a newer authorization.
+		http.Redirect(w, r, pending.returnBase+"/settings", 303)
+		return
+	}
+	c.pending = nil
 	if err == nil {
 		record := c.record
 		record.Token = token
@@ -244,19 +301,45 @@ func (c *Connection) callback(w http.ResponseWriter, r *http.Request) {
 		c.failure = err.Error()
 		result = "failed"
 	}
+	c.finishAuthorization(w, r, pending, result)
+}
+
+func (c *Connection) finishAuthorization(w http.ResponseWriter, r *http.Request, pending *authorization, result string) {
 	http.SetCookie(w, &http.Cookie{Name: "gt_jobadder_flow", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	http.Redirect(w, r, pending.returnBase+"/settings?jobadder="+result, 303)
 	// Close only after the callback response has been sent. HTTP server shutdown
 	// runs outside this handler/lock and also cancels the pending listener.
-	if c.server != nil {
-		server := c.server
-		c.server = nil
+	if pending.server != nil {
+		server := pending.server
+		if c.server == server {
+			c.server = nil
+		}
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			server.Shutdown(ctx)
 		}()
 	}
+}
+
+func (c *Connection) cancelSignInLocked() {
+	if c.pending != nil && c.pending.cancel != nil {
+		c.pending.cancel()
+	}
+	c.pending = nil
+	if c.server != nil {
+		c.server.Close()
+		c.server = nil
+	}
+}
+
+// CancelSignIn closes only the pending authorization, preserving saved details
+// and any previous access token.
+func (c *Connection) CancelSignIn() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cancelSignInLocked()
+	c.failure = ""
 }
 func (c *Connection) Disconnect() error {
 	c.mu.Lock()
@@ -269,23 +352,15 @@ func (c *Connection) Disconnect() error {
 	c.record = credentialRecord{}
 	c.saved = false
 	c.dirty = false
-	c.pending = nil
 	c.failure = ""
-	if c.server != nil {
-		c.server.Close()
-		c.server = nil
-	}
+	c.cancelSignInLocked()
 	return nil
 }
 func (c *Connection) Close() {
 	c.cancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.pending = nil
-	if c.server != nil {
-		c.server.Close()
-		c.server = nil
-	}
+	c.cancelSignInLocked()
 }
 func (c *Connection) accessToken(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)

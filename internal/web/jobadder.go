@@ -1,8 +1,6 @@
 package web
 
 import (
-	"encoding/json"
-	"fmt"
 	"github.com/khoryik96-creator/Garbage/internal/connectors/jobadder"
 	"github.com/khoryik96-creator/Garbage/internal/domain"
 	"net/http"
@@ -18,12 +16,8 @@ func (a *App) connectJobAdder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := jobadder.Configuration{ClientID: r.PostForm.Get("client_id"), ClientSecret: r.PostForm.Get("client_secret"), RedirectURI: r.PostForm.Get("redirect_uri"), PKCE: r.PostForm.Get("pkce") == "1", Remember: r.PostForm.Get("remember") == "1"}
-	if err := a.Options.JobAdder.Configure(cfg); err != nil {
-		a.fail(w, r, err, 0)
-		return
-	}
 	browser := domain.ID()
-	address, err := a.Options.JobAdder.Start("http://"+r.Host, browser)
+	address, err := a.Options.JobAdder.Connect(cfg, "http://"+r.Host, browser)
 	if err != nil {
 		a.fail(w, r, err, 0)
 		return
@@ -32,6 +26,19 @@ func (a *App) connectJobAdder(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self' https://id.jobadder.com; frame-ancestors 'none'; base-uri 'none'")
 	http.Redirect(w, r, address, 303)
+}
+func (a *App) cancelJobAdder(w http.ResponseWriter, r *http.Request) {
+	if a.Options.JobAdder == nil {
+		a.fail(w, r, domain.Invalid("JobAdder is not configured."), 0)
+		return
+	}
+	if err := formKeys(r, "_csrf"); err != nil {
+		a.fail(w, r, err, 0)
+		return
+	}
+	a.Options.JobAdder.CancelSignIn()
+	http.SetCookie(w, &http.Cookie{Name: "gt_jobadder_flow", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+	http.Redirect(w, r, "/settings", 303)
 }
 func (a *App) disconnectJobAdder(w http.ResponseWriter, r *http.Request) {
 	if a.Options.JobAdder == nil {
@@ -60,24 +67,12 @@ func (a *App) jobAdderProfiles(w http.ResponseWriter, r *http.Request) {
 	}
 	profiles := []domain.Candidate{}
 	for _, raw := range page.Items {
-		var candidate struct {
-			ID        int    `json:"candidateId"`
-			FirstName string `json:"firstName"`
-			LastName  string `json:"lastName"`
-			Email     string `json:"email"`
-			Address   struct {
-				Country string `json:"country"`
-			} `json:"address"`
-		}
-		if err = json.Unmarshal(raw, &candidate); err != nil {
-			a.fail(w, r, domain.Invalid("JobAdder returned an unsupported candidate shape."), 0)
+		profile, err := jobadder.Summary(raw)
+		if err != nil {
+			a.fail(w, r, err, 0)
 			return
 		}
-		name := candidate.FirstName + " " + candidate.LastName
-		if name == " " {
-			name = fmt.Sprintf("JobAdder profile #%d", candidate.ID)
-		}
-		profiles = append(profiles, domain.Candidate{ID: candidate.ID, Name: name, Country: domain.String(candidate.Address.Country), OtherFields: map[string]string{"email": candidate.Email}})
+		profiles = append(profiles, profile)
 	}
 	a.render(w, r, "profiles", map[string]any{"Live": true, "LiveTotal": page.TotalCount, "LiveNext": page.Links.Next, "Page": domain.CandidatePage{Candidates: profiles, Finished: true}}, 200)
 }

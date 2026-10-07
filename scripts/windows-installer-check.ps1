@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Setup, [string]$PreviousSetup, [string]$Version = "0.5.0")
+param([Parameter(Mandatory=$true)][string]$Setup, [string]$PreviousSetup, [string]$Version = "0.5.1")
 $ErrorActionPreference = 'Stop'
 $data = Join-Path $env:LOCALAPPDATA 'GarbageTruck'
 $app = Join-Path $env:LOCALAPPDATA 'Programs\Garbage Truck\Garbage Truck.exe'
