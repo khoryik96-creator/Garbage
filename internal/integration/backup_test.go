@@ -9,8 +9,10 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +28,9 @@ func TestRestoreCopyFailureRecoversPreviousWorkspace(t *testing.T) {
 	backup := filepath.Join(t.TempDir(), "backup.db")
 	must(t, s.Backup(context.Background(), backup))
 	must(t, s.Transaction(func(r *storage.Repository) error { _, err := r.EditCountry(1001, domain.String("GB")); return err }))
-	// Hold a different connection's writer lock through the restore deadline.
+	// Hold a different connection's writer lock until the recovery snapshot is
+	// readable, then cancel the destination copy. A short wall-clock deadline
+	// can instead expire during preparation on slower native Windows runners.
 	// The recovery snapshot can read the committed WAL state, but replacing the
 	// destination must fail and then recover after this writer releases its lock.
 	_, err := s.DB.Exec("PRAGMA busy_timeout=1")
@@ -39,15 +43,54 @@ func TestRestoreCopyFailureRecoversPreviousWorkspace(t *testing.T) {
 	defer tx.Rollback()
 	_, err = tx.Exec("UPDATE demo_candidates SET country='NZ' WHERE id=1001")
 	must(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	released := make(chan error, 1)
-	go func() { <-ctx.Done(); time.Sleep(50 * time.Millisecond); released <- tx.Rollback() }()
+	snapshotReady := make(chan bool, 1)
+	go func() {
+		ready := false
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			paths, _ := filepath.Glob(filepath.Join(filepath.Dir(database), "before-restore-*.db"))
+			for _, path := range paths {
+				u := url.URL{Scheme: "file", Path: filepath.ToSlash(path), RawQuery: "mode=ro&_busy_timeout=1"}
+				if !strings.HasPrefix(u.Path, "/") {
+					u.Path = "/" + u.Path
+				}
+				db, openErr := sql.Open("sqlite3", u.String())
+				if openErr != nil {
+					continue
+				}
+				var value, integrity string
+				var proposed int
+				err := db.QueryRow("PRAGMA integrity_check").Scan(&integrity)
+				if err == nil {
+					err = db.QueryRow("SELECT country,(SELECT proposed FROM runs WHERE id=?) FROM demo_candidates WHERE id=1001", run.ID).Scan(&value, &proposed)
+				}
+				db.Close()
+				if err == nil && integrity == "ok" && value == "GB" && proposed == 6 {
+					ready = true
+					break
+				}
+			}
+			if ready {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		snapshotReady <- ready
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+		released <- tx.Rollback()
+	}()
 	recovery, err := s.Restore(ctx, backup)
+	must(t, <-released)
+	if !<-snapshotReady {
+		t.Fatal("recovery snapshot was not prepared before the bounded wait expired")
+	}
 	if err == nil || recovery == "" {
 		t.Fatal("copy failure did not retain a recovery snapshot", err)
 	}
-	must(t, <-released)
 	if value := candidate(t, s, 1001).Country; value == nil || *value != "GB" {
 		t.Fatal("failed restore lost the previous committed value")
 	}
